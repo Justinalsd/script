@@ -2238,11 +2238,11 @@ function getStealPriorityMatchFromEntry(entry, profile)
 		cardData = profile.cards[entry.index]
 	end
 
-	local fromProfile = getStealPriorityMatchFromProfileCard(cardData)
-	if fromProfile then return fromProfile end
-
 	local fromCard = getStealPriorityMatchFromCard(entry.frame)
 	if fromCard then return fromCard end
+
+	local fromProfile = getStealPriorityMatchFromProfileCard(cardData)
+	if fromProfile then return fromProfile end
 
 	return nil
 end
@@ -7617,12 +7617,12 @@ function getRewardProfilePetName(cardData)
 	if type(cardData) ~= "table" then return nil end
 
 	local keys = {
-		"name",
-		"title",
-		"displayName",
 		"petName",
 		"PetName",
 		"animalName",
+		"displayName",
+		"title",
+		"name",
 		"id",
 		"petId",
 	}
@@ -7630,7 +7630,16 @@ function getRewardProfilePetName(cardData)
 	for _, key in ipairs(keys) do
 		local value = cardData[key]
 		if value ~= nil and tostring(value) ~= "" then
-			return tostring(value)
+			local rawName = tostring(value)
+			local resolved = resolvePetName(rawName)
+			if resolved then
+				return resolved
+			end
+
+			local record = getPetSkillRecordByName(rawName)
+			if type(record) == "table" then
+				return tostring(record.title or rawName)
+			end
 		end
 	end
 
@@ -7698,7 +7707,7 @@ function updateLastStolenPetFromRewardEntry(entry, profile, sourceName, score)
 
 	local uiPetName = getRewardPetNameFromCard(card)
 	local targetMatch = getStealPriorityMatchFromEntry(entry, profile)
-	local petName = targetMatch or profilePetName or uiPetName or "Unknown"
+	local petName = targetMatch or uiPetName or profilePetName or "Unknown"
 	local dbTierName = getPetTierNameByPetName(petName)
 	if dbTierName ~= "" then
 		tierName = dbTierName
