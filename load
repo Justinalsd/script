@@ -8287,7 +8287,7 @@ local SettingPage = createPage("Settings")
 createTab("Farm", "⚔ Farm")
 createTab("Reward", "🎁 Reward")
 createTab("BattlePet", "🐾 Battle")
-createTab("Locks", "🔒 Locks")
+createTab("Locks", "🔒 Pet Filters")
 createTab("Settings", "⚙ Setup")
 
 local activeParent = FarmPage
@@ -8628,6 +8628,7 @@ local function getNameList(kind)
 end
 
 local function createNameEditor(name, icon, kind)
+    local isStealNameEditor = tostring(kind or ""):lower() == "steal"
     local rowH = math.floor((isMobile and 218 or 242) * scale)
     local row = makeRow(name, icon, 0, rowH)
     row.ClipsDescendants = true
@@ -8642,7 +8643,7 @@ local function createNameEditor(name, icon, kind)
     input.Position = UDim2.new(0, 10, 0, math.floor(36 * scale))
     input.BackgroundColor3 = Color3.fromRGB(35, 45, 80)
     input.TextColor3 = Color3.fromRGB(255, 255, 255)
-    input.PlaceholderText = "Pet name..."
+    input.PlaceholderText = isStealNameEditor and "Pet name to steal..." or "Pet name to protect..."
     input.ClearTextOnFocus = false
     input.Text = ""
     input.Font = Enum.Font.Gotham
@@ -8761,7 +8762,7 @@ local function createNameEditor(name, icon, kind)
             empty.Font = Enum.Font.GothamSemibold
             empty.TextSize = TEXT_11
             empty.TextXAlignment = Enum.TextXAlignment.Left
-            empty.Text = "  No names added yet"
+            empty.Text = isStealNameEditor and "  No steal target names added yet" or "  No sell lock names added yet"
             empty.BorderSizePixel = 0
             empty.Parent = listFrame
             newCorner(empty, 6)
@@ -8785,7 +8786,7 @@ local function createNameEditor(name, icon, kind)
             lbl.TextSize = TEXT_11
             lbl.TextXAlignment = Enum.TextXAlignment.Left
             lbl.TextTruncate = Enum.TextTruncate.AtEnd
-            lbl.Text = "✓ " .. petName
+            lbl.Text = (isStealNameEditor and "🎯 " or "🔒 ") .. petName
             lbl.Parent = entry
 
             local x = Instance.new("TextButton")
@@ -8810,14 +8811,14 @@ local function createNameEditor(name, icon, kind)
         local petName = input.Text
         addName(petName)
         rebuild()
-        setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
+        setStatus((isStealNameEditor and "Added steal target: " or "Added sell lock: ") .. tostring(petName), Color3.fromRGB(0, 220, 255))
     end)
     bindPress(delBtn, function()
         local petName = input.Text
         removeName(petName)
         input.Text = ""
         rebuild()
-        setStatus("Removed " .. tostring(petName), Color3.fromRGB(255, 170, 0))
+        setStatus((isStealNameEditor and "Removed steal target: " or "Removed sell lock: ") .. tostring(petName), Color3.fromRGB(255, 170, 0))
     end)
     bindPress(clearBtn, function()
         clearNames()
@@ -8829,7 +8830,7 @@ local function createNameEditor(name, icon, kind)
             local petName = input.Text
             addName(petName)
             rebuild()
-            setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
+            setStatus((isStealNameEditor and "Added steal target: " or "Added sell lock: ") .. tostring(petName), Color3.fromRGB(0, 220, 255))
         end
     end)
     rebuild()
@@ -9283,9 +9284,11 @@ sectionTitle("Battle Pet Lock", "🐾")
 createBattlePetLockScreen()
 
 setCategory("Locks")
-sectionTitle("Name Locks", "✍")
-createNameEditor("Steal Priority Name", "🎯", "steal")
-createNameEditor("Sell Lock Name", "🐶", "sell")
+sectionTitle("Steal Target Names", "🎯")
+createNameEditor("Pets to Steal", "🎯", "steal")
+
+sectionTitle("Sell Lock Names", "🔒")
+createNameEditor("Pets Protected from Sell", "🐶", "sell")
 
 setCategory("Settings")
 sectionTitle("Sell Settings", "📦")
