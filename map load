@@ -1,0 +1,305 @@
+-- ============================================
+-- WHAT HUB - MAP LOADER NOTIFY STANDALONE FIXED
+-- Run this only after your key is verified.
+-- ============================================
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+-- ============================================
+-- MAP SCRIPT CONFIG
+-- ============================================
+local MAP_CONFIG = {
+    [81272814168643] = {
+        Name = "Bettle Pet",
+        Url = "https://pastefy.app/xTLewrvu/raw",
+    },
+
+    [7871169780] = {
+        Name = "Minesweeper",
+        Url = "https://pastefy.app/5vPuwMsw/raw",
+    },
+
+    [93833944515093] = {
+        Name = "Between Colors",
+        Url = "https://pastefy.app/DSqfhpvN/raw",
+    },
+}
+
+local MAP_NAMES = {}
+for placeId, cfg in pairs(MAP_CONFIG) do
+    MAP_NAMES[placeId] = cfg.Name
+end
+
+local THEME = {
+    Card = Color3.fromRGB(13, 15, 24),
+    Card2 = Color3.fromRGB(20, 26, 45),
+    Accent = Color3.fromRGB(35, 125, 255),
+    Accent2 = Color3.fromRGB(0, 220, 255),
+    Green = Color3.fromRGB(0, 255, 150),
+    Red = Color3.fromRGB(255, 70, 90),
+    Yellow = Color3.fromRGB(255, 205, 70),
+    White = Color3.fromRGB(248, 250, 255),
+    Gray = Color3.fromRGB(210, 220, 245),
+    Stroke = Color3.fromRGB(80, 130, 255),
+}
+
+local function getSafeParent()
+    if type(gethui) == "function" then
+        local ok, hui = pcall(gethui)
+        if ok and hui then
+            return hui
+        end
+    end
+
+    local ok, cg = pcall(function()
+        return game:GetService("CoreGui")
+    end)
+
+    if ok and cg then
+        return cg
+    end
+
+    return PlayerGui
+end
+
+local oldGui = getSafeParent():FindFirstChild("WhatHubMapLoaderNotify")
+if oldGui then
+    oldGui:Destroy()
+end
+
+local NotifyGui = Instance.new("ScreenGui")
+NotifyGui.Name = "WhatHubMapLoaderNotify"
+NotifyGui.ResetOnSpawn = false
+NotifyGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+NotifyGui.DisplayOrder = 2147483646
+NotifyGui.IgnoreGuiInset = true
+NotifyGui.Parent = getSafeParent()
+
+local ToastHolder = Instance.new("Frame")
+ToastHolder.BackgroundTransparency = 1
+ToastHolder.AnchorPoint = Vector2.new(1, 0)
+ToastHolder.Position = UDim2.new(1, -18, 0, 18)
+ToastHolder.Size = UDim2.new(0, 360, 1, -36)
+ToastHolder.Parent = NotifyGui
+
+local List = Instance.new("UIListLayout")
+List.Padding = UDim.new(0, 10)
+List.SortOrder = Enum.SortOrder.LayoutOrder
+List.HorizontalAlignment = Enum.HorizontalAlignment.Right
+List.Parent = ToastHolder
+
+local function refreshToastLayout()
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+    local width = math.clamp(viewport.X - 28, 260, 360)
+
+    ToastHolder.Size = UDim2.new(0, width, 1, -36)
+    ToastHolder.Position = UDim2.new(1, -14, 0, 14)
+end
+
+refreshToastLayout()
+
+if workspace.CurrentCamera then
+    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(refreshToastLayout)
+end
+
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    task.wait(0.1)
+    refreshToastLayout()
+
+    if workspace.CurrentCamera then
+        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(refreshToastLayout)
+    end
+end)
+
+local function notify(title, message, color, duration)
+    duration = duration or 5
+    color = color or THEME.Accent
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 92)
+    frame.BackgroundColor3 = THEME.Card
+    frame.BackgroundTransparency = 0.02
+    frame.BorderSizePixel = 0
+    frame.LayoutOrder = -math.floor(os.clock() * 1000)
+    frame.Position = UDim2.new(1, 30, 0, 0)
+    frame.Parent = ToastHolder
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color
+    stroke.Thickness = 2
+    stroke.Transparency = 0.05
+    stroke.Parent = frame
+
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 5, 1, -18)
+    bar.Position = UDim2.new(0, 10, 0, 9)
+    bar.BackgroundColor3 = color
+    bar.BorderSizePixel = 0
+    bar.Parent = frame
+
+    local barCorner = Instance.new("UICorner")
+    barCorner.CornerRadius = UDim.new(1, 0)
+    barCorner.Parent = bar
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Size = UDim2.new(1, -36, 0, 24)
+    titleLabel.Position = UDim2.new(0, 24, 0, 10)
+    titleLabel.Text = tostring(title)
+    titleLabel.TextColor3 = THEME.White
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = UserInputService.TouchEnabled and 13 or 14
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    titleLabel.Parent = frame
+
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.Size = UDim2.new(1, -36, 0, 48)
+    msgLabel.Position = UDim2.new(0, 24, 0, 36)
+    msgLabel.Text = tostring(message)
+    msgLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+    msgLabel.Font = Enum.Font.GothamMedium
+    msgLabel.TextSize = UserInputService.TouchEnabled and 11 or 12
+    msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+    msgLabel.TextYAlignment = Enum.TextYAlignment.Top
+    msgLabel.TextWrapped = true
+    msgLabel.Parent = frame
+
+    TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+        Position = UDim2.new(0, 0, 0, 0)
+    }):Play()
+
+    task.delay(duration, function()
+        if not frame.Parent then
+            return
+        end
+
+        TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+            Position = UDim2.new(1, 30, 0, 0),
+            BackgroundTransparency = 1
+        }):Play()
+
+        task.delay(0.3, function()
+            if frame then
+                frame:Destroy()
+            end
+        end)
+    end)
+end
+
+local function getMapDisplayName(placeId)
+    placeId = tonumber(placeId) or game.PlaceId
+
+    if MAP_NAMES and MAP_NAMES[placeId] then
+        return MAP_NAMES[placeId]
+    end
+
+    local ok, info = pcall(function()
+        return MarketplaceService:GetProductInfo(placeId)
+    end)
+
+    if ok and type(info) == "table" and info.Name and tostring(info.Name) ~= "" then
+        return tostring(info.Name)
+    end
+
+    return "Unknown Map"
+end
+
+local function httpGet(url)
+    if type(url) ~= "string" or url == "" then
+        return false, "Invalid script URL"
+    end
+
+    local ok, result = pcall(function()
+        return game:HttpGet(url, true)
+    end)
+
+    if ok and type(result) == "string" and result ~= "" then
+        return true, result
+    end
+
+    return false, tostring(result or "HttpGet failed")
+end
+
+local function runSource(source, mapName)
+    local loader = loadstring or load
+
+    if type(loader) ~= "function" then
+        return false, "loadstring/load is not available in this executor"
+    end
+
+    local fn, compileErr = loader(source)
+
+    if type(fn) ~= "function" then
+        return false, "Compile error: " .. tostring(compileErr)
+    end
+
+    local ok, runtimeErr = pcall(fn)
+
+    if not ok then
+        return false, "Runtime error in " .. tostring(mapName) .. ": " .. tostring(runtimeErr)
+    end
+
+    return true
+end
+
+local function loadForCurrentMap()
+    local placeId = game.PlaceId
+    local config = MAP_CONFIG[placeId]
+
+    if not config then
+        local mapName = getMapDisplayName(placeId)
+
+        notify(
+            "Unsupported Map",
+            mapName .. " • Unsupported PlaceId: " .. tostring(placeId),
+            THEME.Red,
+            8
+        )
+
+        warn("[What HUB Loader] Unsupported PlaceId:", placeId)
+        return false
+    end
+
+    local mapName = config.Name or getMapDisplayName(placeId)
+    local scriptUrl = config.Url
+
+    notify("Map Detected", mapName .. " • PlaceId: " .. tostring(placeId), THEME.Accent2, 4.5)
+    notify("Loading Script", "Loading script for " .. mapName .. "...", THEME.Green, 3.5)
+
+    task.spawn(function()
+        local getOk, sourceOrErr = httpGet(scriptUrl)
+
+        if not getOk then
+            notify("HttpGet Error", tostring(sourceOrErr), THEME.Red, 8)
+            warn("[What HUB Loader] HttpGet error:", sourceOrErr)
+            return
+        end
+
+        local runOk, runErr = runSource(sourceOrErr, mapName)
+
+        if runOk then
+            notify("Script Loaded", "Loaded successfully for " .. mapName .. ".", THEME.Green, 5)
+            print("[What HUB Loader] Script loaded successfully:", mapName, "PlaceId:", placeId)
+        else
+            notify("Script Error", tostring(runErr), THEME.Red, 8)
+            warn("[What HUB Loader] Script error:", runErr)
+        end
+    end)
+
+    return true
+end
+
+loadForCurrentMap()
