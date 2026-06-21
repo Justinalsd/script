@@ -1168,13 +1168,6 @@ function sendBattleWebhook(data)
 			petInfo ..= "\nTier: " .. tostring(data.Pet.Tier)
 		end
 
-		if data.Pet.RewardType and tostring(data.Pet.RewardType) ~= "" then
-			petInfo ..= "\nReward Type: " .. tostring(data.Pet.RewardType)
-		end
-
-		if data.Pet.ProfileSource and tostring(data.Pet.ProfileSource) ~= "" then
-			petInfo ..= "\nReward Source: " .. tostring(data.Pet.ProfileSource)
-		end
 
 		if data.Pet.TargetMatched or data.Pet.PriorityMatched then
 			petInfo ..= "\nTarget Name: Yes"
@@ -7656,6 +7649,14 @@ function getRewardProfileRewardType(cardData)
 	return value and tostring(value) or ""
 end
 
+function getPetTierNameByPetName(petName)
+	local record = getPetSkillRecordByName(petName)
+	if type(record) == "table" and record.tier ~= nil and tostring(record.tier) ~= "" then
+		return tostring(record.tier)
+	end
+	return ""
+end
+
 function updateLastStolenPetFromRewardEntry(entry, profile, sourceName, score)
 	if type(entry) ~= "table" or not entry.frame then return end
 
@@ -7698,6 +7699,10 @@ function updateLastStolenPetFromRewardEntry(entry, profile, sourceName, score)
 	local uiPetName = getRewardPetNameFromCard(card)
 	local targetMatch = getStealPriorityMatchFromEntry(entry, profile)
 	local petName = targetMatch or profilePetName or uiPetName or "Unknown"
+	local dbTierName = getPetTierNameByPetName(petName)
+	if dbTierName ~= "" then
+		tierName = dbTierName
+	end
 	local skillScore, skillMatches = getSkillScoreByPetName(petName)
 	local allSkills = getAllSkillTypesByPetName(petName)
 	local inventoryFull, inventoryDisplay = getPetInventoryDisplayAfterSteal()
@@ -7756,6 +7761,7 @@ function updateLastStolenPetFromCard(card)
 
 	local targetMatch = getStealPriorityMatchFromCard(card)
 	local petName = targetMatch or getRewardPetNameFromCard(card) or text[1] or "Unknown"
+	local tierName = getPetTierNameByPetName(petName)
 	local skillScore, skillMatches = getSkillScoreByPetName(petName)
 	local allSkills = getAllSkillTypesByPetName(petName)
 	local inventoryFull, inventoryDisplay = getPetInventoryDisplayAfterSteal()
@@ -7766,6 +7772,7 @@ function updateLastStolenPetFromCard(card)
 		Level = level or 0,
 		Damage = damage or 0,
 		Health = health or 0,
+		Tier = tierName,
 		ImageId = imageId,
 		InventoryFull = inventoryFull,
 		Inventory = inventoryDisplay,
