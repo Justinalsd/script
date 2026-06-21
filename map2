@@ -1,0 +1,729 @@
+--//====================================================
+--// Between Colors Auto Swap
+--// Version: RequestState + RoundEvent + BoardPosition
+--// ไม่ต้องย้ายบล็อกเพื่อดึง BoardId
+--//====================================================
+
+getgenv().BC_AUTO_SWAP = true
+
+--//========================
+--// Services
+--//========================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+--//========================
+--// Remotes
+--//========================
+local BetweenColors = ReplicatedStorage:WaitForChild("BetweenColors")
+local Remotes = BetweenColors:WaitForChild("Remotes")
+
+local RoundEvent = Remotes:WaitForChild("RoundEvent")
+local PlayerAction = Remotes:WaitForChild("PlayerAction")
+local RequestState = Remotes:WaitForChild("RequestState")
+
+--//========================
+--// Config
+--//========================
+local AUTO_DELAY = 0.075
+local RESCAN_DELAY = 0.15
+local STATE_RETRY_DELAY = 0.5
+local MAX_SWAPS_PER_BOARD = 700
+
+local PRINT_LOG = true
+
+-- ถ้าเป็นด่านที่มี fog / locked แล้วไม่ให้สลับบางช่อง เปิดอันนี้ไว้
+local RESPECT_LOCKED_AND_FOG = true
+
+--//========================
+--// Runtime State
+--//========================
+local Captured = {
+    Ready = false,
+
+    BoardId = nil,
+    RoundId = nil,
+    Mode = nil,
+    DuelId = nil,
+
+    SwapId = 0,
+
+    Order = nil,
+    Size = nil,
+    LockedMap = nil,
+    VisibleMap = nil,
+
+    Solved = false,
+    Phase = nil,
+}
+
+local LastBoardKey = nil
+local IsSolving = false
+
+--//========================
+--// Utility
+--//========================
+local function log(...)
+    if PRINT_LOG then
+        print("[BC AUTO SWAP]", ...)
+    end
+end
+
+local function safeNumber(v)
+    local n = tonumber(v)
+    if not n then
+        return nil
+    end
+    n = math.floor(n)
+    if n <= 0 then
+        return nil
+    end
+    return n
+end
+
+local function countArray(t)
+    if type(t) ~= "table" then
+        return 0
+    end
+
+    local n = 0
+    for i, v in pairs(t) do
+        if type(i) == "number" and v ~= nil then
+            n += 1
+        end
+    end
+
+    return n
+end
+
+local function makeMap(listOrMap)
+    if type(listOrMap) ~= "table" then
+        return nil
+    end
+
+    local map = {}
+
+    for k, v in pairs(listOrMap) do
+        if type(k) == "number" and v == true then
+            map[k] = true
+        elseif type(v) == "number" then
+            map[math.floor(v)] = true
+        elseif tonumber(v) then
+            map[math.floor(tonumber(v))] = true
+        end
+    end
+
+    if next(map) == nil then
+        return nil
+    end
+
+    return map
+end
+
+local function shallowCopyArray(t)
+    local new = {}
+    if type(t) == "table" then
+        for i, v in pairs(t) do
+            if type(i) == "number" then
+                new[i] = v
+            end
+        end
+    end
+    return new
+end
+
+local function getBoardKey()
+    if Captured.BoardId then
+        return tostring(Captured.BoardId)
+    end
+
+    if Captured.Mode and Captured.RoundId then
+        return tostring(Captured.Mode) .. ":" .. tostring(Captured.RoundId)
+    end
+
+    return nil
+end
+
+--//========================
+--// GUI / Tile Reader
+--//========================
+local function getTileLayer()
+    local gui = PlayerGui:FindFirstChild("BetweenColorsGui")
+    if not gui then return nil end
+
+    local app = gui:FindFirstChild("App")
+    if not app then return nil end
+
+    local gameFrame = app:FindFirstChild("GameFrame")
+    if not gameFrame then return nil end
+
+    local gridFrame = gameFrame:FindFirstChild("GridFrame")
+    if not gridFrame then return nil end
+
+    return gridFrame:FindFirstChild("TileLayer")
+end
+
+local function parseTileNumber(tile)
+    if not tile or not tile.Name then
+        return nil
+    end
+
+    local id = tile.Name:match("^Tile_(%d+)$")
+    return id and tonumber(id) or nil
+end
+
+local function isTileGui(obj)
+    return obj
+        and obj:IsA("GuiObject")
+        and parseTileNumber(obj) ~= nil
+end
+
+local function readBoardFromGui()
+    local tileLayer = getTileLayer()
+    if not tileLayer then
+        return nil, "TileLayer not found"
+    end
+
+    local order = {}
+    local posOfTile = {}
+    local maxPos = 0
+    local tileCount = 0
+
+    for _, child in ipairs(tileLayer:GetChildren()) do
+        if isTileGui(child) then
+            local tileId = parseTileNumber(child)
+            local boardPos = child:GetAttribute("BoardPosition")
+
+            tileId = safeNumber(tileId)
+            boardPos = safeNumber(boardPos)
+
+            if tileId and boardPos then
+                order[boardPos] = tileId
+                posOfTile[tileId] = boardPos
+
+                maxPos = math.max(maxPos, boardPos)
+                tileCount += 1
+            end
+        end
+    end
+
+    if tileCount <= 1 then
+        return nil, "Not enough GUI tiles"
+    end
+
+    return {
+        Source = "GUI",
+        Count = tileCount,
+        MaxPos = maxPos,
+        Order = order,
+        PosOfTile = posOfTile,
+    }
+end
+
+local function readBoardFromCapturedOrder()
+    if type(Captured.Order) ~= "table" then
+        return nil, "No captured Order"
+    end
+
+    local order = shallowCopyArray(Captured.Order)
+    local posOfTile = {}
+    local maxPos = 0
+    local tileCount = 0
+
+    for pos, tileId in pairs(order) do
+        pos = safeNumber(pos)
+        tileId = safeNumber(tileId)
+
+        if pos and tileId then
+            order[pos] = tileId
+            posOfTile[tileId] = pos
+
+            maxPos = math.max(maxPos, pos)
+            tileCount += 1
+        end
+    end
+
+    if tileCount <= 1 then
+        return nil, "Not enough captured tiles"
+    end
+
+    return {
+        Source = "STATE",
+        Count = tileCount,
+        MaxPos = maxPos,
+        Order = order,
+        PosOfTile = posOfTile,
+    }
+end
+
+local function readBestBoard()
+    local guiBoard = readBoardFromGui()
+    if guiBoard then
+        return guiBoard
+    end
+
+    local stateBoard = readBoardFromCapturedOrder()
+    if stateBoard then
+        return stateBoard
+    end
+
+    return nil, "No board found"
+end
+
+--//========================
+--// Payload Finder
+--//========================
+local function looksLikeBoardPayload(t)
+    if type(t) ~= "table" then
+        return false
+    end
+
+    local hasRound = t.RoundId ~= nil or t.BoardId ~= nil
+    local hasMode = t.Mode ~= nil
+    local hasBoard = type(t.Order) == "table" or t.Size ~= nil or t.Phase ~= nil
+
+    return hasRound and (hasMode or hasBoard)
+end
+
+local function findBoardPayload(root, depth, visited)
+    if type(root) ~= "table" then
+        return nil
+    end
+
+    depth = depth or 0
+    if depth > 8 then
+        return nil
+    end
+
+    visited = visited or {}
+    if visited[root] then
+        return nil
+    end
+    visited[root] = true
+
+    if looksLikeBoardPayload(root) then
+        return root
+    end
+
+    local priorityKeys = {
+        "State",
+        "Round",
+        "Board",
+        "PlayerBoard",
+        "CurrentBoard",
+        "Payload",
+        "Data",
+        "Game",
+        "TimedRace",
+        "Practice",
+        "Level",
+        "Duel",
+    }
+
+    for _, key in ipairs(priorityKeys) do
+        local v = root[key]
+        if type(v) == "table" then
+            local found = findBoardPayload(v, depth + 1, visited)
+            if found then
+                return found
+            end
+        end
+    end
+
+    for _, v in pairs(root) do
+        if type(v) == "table" then
+            local found = findBoardPayload(v, depth + 1, visited)
+            if found then
+                return found
+            end
+        end
+    end
+
+    return nil
+end
+
+local function applyPayload(payload, sourceName)
+    if type(payload) ~= "table" then
+        return false
+    end
+
+    local boardId = payload.BoardId
+    local roundId = payload.RoundId
+    local mode = payload.Mode
+    local duelId = payload.DuelId
+
+    if boardId ~= nil then
+        Captured.BoardId = boardId
+    end
+
+    if roundId ~= nil then
+        Captured.RoundId = roundId
+    end
+
+    if mode ~= nil then
+        Captured.Mode = mode
+    end
+
+    if duelId ~= nil then
+        Captured.DuelId = duelId
+    end
+
+    if payload.Phase ~= nil then
+        Captured.Phase = payload.Phase
+    end
+
+    if payload.Solved ~= nil then
+        Captured.Solved = payload.Solved == true
+    end
+
+    if type(payload.Order) == "table" then
+        Captured.Order = shallowCopyArray(payload.Order)
+    end
+
+    if payload.Size ~= nil then
+        Captured.Size = tonumber(payload.Size)
+    elseif type(Captured.Order) == "table" then
+        local c = countArray(Captured.Order)
+        local s = math.sqrt(c)
+        if s == math.floor(s) then
+            Captured.Size = s
+        end
+    end
+
+    if payload.LockedPositions ~= nil then
+        Captured.LockedMap = makeMap(payload.LockedPositions)
+    end
+
+    if payload.VisiblePositions ~= nil then
+        Captured.VisibleMap = makeMap(payload.VisiblePositions)
+    end
+
+    if payload.SwapId ~= nil then
+        Captured.SwapId = tonumber(payload.SwapId) or Captured.SwapId or 0
+    elseif payload.NextSwapId ~= nil then
+        Captured.SwapId = tonumber(payload.NextSwapId) or Captured.SwapId or 0
+    end
+
+    if Captured.BoardId and Captured.RoundId and Captured.Mode then
+        Captured.Ready = true
+
+        local key = getBoardKey()
+        if key and key ~= LastBoardKey then
+            LastBoardKey = key
+            Captured.SwapId = 0
+            log("Board captured from", sourceName or "unknown", "BoardId:", Captured.BoardId)
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function captureFromRequestState()
+    local ok, state = pcall(function()
+        return RequestState:InvokeServer()
+    end)
+
+    if not ok then
+        log("RequestState error:", state)
+        return false
+    end
+
+    if type(state) ~= "table" then
+        log("RequestState returned non-table")
+        return false
+    end
+
+    local payload = findBoardPayload(state)
+    if not payload then
+        log("RequestState has no board payload")
+        return false
+    end
+
+    return applyPayload(payload, "RequestState")
+end
+
+--//========================
+--// Solver
+--//========================
+local function isPositionBlocked(pos)
+    if not RESPECT_LOCKED_AND_FOG then
+        return false
+    end
+
+    if Captured.LockedMap and Captured.LockedMap[pos] == true then
+        return true
+    end
+
+    -- Fog mode: ถ้าช่องยังไม่ visible และไม่ใช่ช่องที่ถูกต้องอยู่แล้ว จะไม่ยุ่ง
+    if Captured.VisibleMap and Captured.VisibleMap[pos] ~= true then
+        if Captured.Order and Captured.Order[pos] == pos then
+            return false
+        end
+
+        return true
+    end
+
+    return false
+end
+
+local function isSolved(board)
+    if not board or not board.Order then
+        return false
+    end
+
+    for pos = 1, board.MaxPos do
+        if board.Order[pos] ~= pos then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function rebuildPosOfTile(board)
+    board.PosOfTile = {}
+
+    for pos, tileId in pairs(board.Order) do
+        if type(pos) == "number" and type(tileId) == "number" then
+            board.PosOfTile[tileId] = pos
+        end
+    end
+end
+
+local function getNextSwap(board)
+    if not board or not board.Order or not board.PosOfTile then
+        return nil
+    end
+
+    for targetPos = 1, board.MaxPos do
+        local currentTile = board.Order[targetPos]
+
+        if currentTile and currentTile ~= targetPos then
+            local correctTile = targetPos
+            local correctTilePos = board.PosOfTile[correctTile]
+
+            if correctTilePos and correctTilePos ~= targetPos then
+                if not isPositionBlocked(targetPos) and not isPositionBlocked(correctTilePos) then
+                    return targetPos, correctTilePos
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function updateLocalBoard(board, fromPos, toPos)
+    local a = board.Order[fromPos]
+    local b = board.Order[toPos]
+
+    board.Order[fromPos] = b
+    board.Order[toPos] = a
+
+    if a then
+        board.PosOfTile[a] = toPos
+    end
+
+    if b then
+        board.PosOfTile[b] = fromPos
+    end
+
+    Captured.Order = shallowCopyArray(board.Order)
+end
+
+local function fireSwap(fromPos, toPos)
+    if not Captured.Ready then
+        return false, "Not ready"
+    end
+
+    if not Captured.BoardId or not Captured.RoundId or not Captured.Mode then
+        return false, "Missing BoardId/RoundId/Mode"
+    end
+
+    Captured.SwapId = (tonumber(Captured.SwapId) or 0) + 1
+
+    local payload = {
+        Mode = Captured.Mode,
+        RoundId = Captured.RoundId,
+        BoardId = Captured.BoardId,
+        From = fromPos,
+        To = toPos,
+        SwapId = Captured.SwapId,
+    }
+
+    if Captured.DuelId ~= nil then
+        payload.DuelId = Captured.DuelId
+    end
+
+    PlayerAction:FireServer("SwapTiles", payload)
+
+    return true
+end
+
+--//========================
+--// RoundEvent Listener
+--//========================
+RoundEvent.OnClientEvent:Connect(function(eventName, payload)
+    if type(payload) ~= "table" then
+        return
+    end
+
+    if eventName == "State"
+        or eventName == "RoundStarted"
+        or eventName == "PlayerBoard"
+        or eventName == "SwapAccepted"
+        or eventName == "LevelCompleted"
+        or eventName == "RowRevealed"
+    then
+        applyPayload(payload, "RoundEvent:" .. tostring(eventName))
+    end
+end)
+
+--//========================
+--// Optional fallback hook
+--// ถ้า RequestState ยังหาไม่ได้จริงๆ จะดักจาก SwapTiles ที่ผู้เล่นทำเอง
+--//========================
+local function installFallbackHook()
+    if getgenv().BC_AUTO_SWAP_HOOKED then
+        return
+    end
+
+    getgenv().BC_AUTO_SWAP_HOOKED = true
+
+    local ok, mt = pcall(function()
+        return getrawmetatable(game)
+    end)
+
+    if not ok or not mt then
+        log("Fallback hook not supported")
+        return
+    end
+
+    local oldNamecall = mt.__namecall
+
+    setreadonly(mt, false)
+
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        local args = { ... }
+
+        if self == PlayerAction and method == "FireServer" then
+            local action = args[1]
+            local payload = args[2]
+
+            if action == "SwapTiles" and type(payload) == "table" then
+                applyPayload(payload, "FallbackSwapHook")
+            end
+        end
+
+        return oldNamecall(self, ...)
+    end)
+
+    setreadonly(mt, true)
+
+    log("Fallback hook installed")
+end
+
+--//========================
+--// Main Auto Solve Loop
+--//========================
+local function waitUntilReady()
+    while getgenv().BC_AUTO_SWAP and not Captured.Ready do
+        captureFromRequestState()
+        task.wait(STATE_RETRY_DELAY)
+    end
+
+    return Captured.Ready
+end
+
+local function solveCurrentBoard()
+    if IsSolving then
+        return
+    end
+
+    IsSolving = true
+
+    local board, err = readBestBoard()
+    if not board then
+        log("Read board failed:", err)
+        IsSolving = false
+        return
+    end
+
+    rebuildPosOfTile(board)
+
+    local swaps = 0
+
+    while getgenv().BC_AUTO_SWAP do
+        if Captured.Solved == true then
+            break
+        end
+
+        if isSolved(board) then
+            log("Solved locally")
+            break
+        end
+
+        if swaps >= MAX_SWAPS_PER_BOARD then
+            log("Max swaps reached")
+            break
+        end
+
+        local fromPos, toPos = getNextSwap(board)
+        if not fromPos or not toPos then
+            log("No valid swap found")
+            break
+        end
+
+        local ok, reason = fireSwap(fromPos, toPos)
+        if not ok then
+            log("Fire swap failed:", reason)
+            break
+        end
+
+        updateLocalBoard(board, fromPos, toPos)
+
+        swaps += 1
+        task.wait(AUTO_DELAY)
+    end
+
+    IsSolving = false
+end
+
+local function main()
+    log("Loaded")
+    log("Capturing BoardId from RequestState...")
+
+    installFallbackHook()
+
+    captureFromRequestState()
+
+    if not Captured.Ready then
+        log("Waiting for RequestState / RoundEvent...")
+        waitUntilReady()
+    end
+
+    log("Ready")
+    log("Mode:", Captured.Mode)
+    log("RoundId:", Captured.RoundId)
+    log("BoardId:", Captured.BoardId)
+
+    while getgenv().BC_AUTO_SWAP do
+        if not Captured.Ready then
+            captureFromRequestState()
+            task.wait(STATE_RETRY_DELAY)
+        else
+            solveCurrentBoard()
+            task.wait(RESCAN_DELAY)
+        end
+    end
+
+    log("Stopped")
+end
+
+task.spawn(main)
