@@ -2168,6 +2168,73 @@ function getStealPriorityNameScore(petName)
 	return 0
 end
 
+function hasStealPriorityPetTargets()
+	normalizePetNameLists()
+	for _, enabled in pairs(stealPriorityPets or {}) do
+		if enabled == true then
+			return true
+		end
+	end
+	return false
+end
+
+function rewardEntryMatchesPetTarget(entry, profile)
+	if type(entry) ~= "table" then return false, nil end
+
+	local cardData = nil
+	if type(profile) == "table" and type(profile.cards) == "table" then
+		cardData = profile.cards[entry.index]
+	end
+
+	local names = {}
+	if type(cardData) == "table" then
+		table.insert(names, cardData.name)
+		table.insert(names, cardData.title)
+		table.insert(names, cardData.petName)
+		table.insert(names, cardData.displayName)
+	end
+
+	if entry.frame then
+		table.insert(names, getRewardPetNameFromCard(entry.frame))
+	end
+
+	for _, name in ipairs(names) do
+		if name and tostring(name) ~= "" and isPriorityPet(name) then
+			return true, tostring(name)
+		end
+	end
+
+	return false, nil
+end
+
+function pickBestTargetRewardEntry(cards, profile)
+	if not hasStealPriorityPetTargets() then
+		return nil, "no_pet_targets"
+	end
+
+	local bestEntry = nil
+	local bestScore = -math.huge
+	local bestName = nil
+
+	for _, entry in ipairs(cards or {}) do
+		local matched, targetName = rewardEntryMatchesPetTarget(entry, profile)
+		if matched then
+			local score = getCombinedRewardScore(entry, profile)
+			if score > bestScore then
+				bestScore = score
+				bestEntry = entry
+				bestName = targetName
+			end
+		end
+	end
+
+	if bestEntry then
+		return bestEntry, "pet_target_" .. tostring(bestName or "matched") .. "_score_" .. tostring(bestScore)
+	end
+
+	return nil, "pet_targets_not_visible"
+end
+
 Remotes = ReplicatedStorage:WaitForChild("Remotes")
 ClientSignals = ReplicatedStorage:WaitForChild("ClientSignals")
 VirtualUser = game:GetService("VirtualUser")
@@ -7502,6 +7569,7 @@ function updateLastStolenPetFromCard(card)
 		InventoryFull = inventoryFull,
 		Inventory = inventoryDisplay,
 		PriorityMatched = isPriorityPet(petName),
+		TargetMatched = isPriorityPet(petName),
 		SellLocked = isPetSellLocked(petName),
 		SkillScore = skillScore or 0,
 		SkillMatches = skillMatches or {},
@@ -7572,6 +7640,13 @@ function chooseBestRewardEntry(cards)
 	end
 
 	local profile, matchReason = findMatchingRewardProfile(cards)
+
+	local targetEntry, targetReason = pickBestTargetRewardEntry(cards, profile)
+	if targetEntry and targetEntry.frame then
+		updateLastStolenPetFromCard(targetEntry.frame)
+		return targetEntry, tostring(targetReason)
+	end
+
 	if profile and type(profile.cards) == "table" then
 		local bestEntry = nil
 		local bestScore = -math.huge
