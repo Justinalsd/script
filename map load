@@ -17,17 +17,17 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local MAP_CONFIG = {
     [81272814168643] = {
         Name = "Bettle Pet",
-        Url = "https://pastefy.app/xTLewrvu/raw",
+        Url = "https://justinalsd.github.io/script/load",
     },
 
     [7871169780] = {
         Name = "Minesweeper",
-        Url = "https://pastefy.app/5vPuwMsw/raw",
+        Url = "https://justinalsd.github.io/script/map3",
     },
 
     [93833944515093] = {
         Name = "Between Colors",
-        Url = "https://pastefy.app/DSqfhpvN/raw",
+        Url = "https://justinalsd.github.io/script/map2",
     },
 }
 
