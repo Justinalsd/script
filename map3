@@ -1,0 +1,1550 @@
+-- ============================================
+-- Nearby Minesweeper Dot Solver v5.6 ULTRA-FAST
+-- + Password Auto-Capture
+-- + User-Friendly UI & Notifications
+-- + LIGHTNING FAST SOLVING
+-- ============================================
+
+local Players    = game:GetService("Players")
+local Workspace  = game:GetService("Workspace")
+local UIS        = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RepStorage = game:GetService("ReplicatedStorage")
+local GuiService = game:GetService("GuiService")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart  = character:WaitForChild("HumanoidRootPart")
+player.CharacterAdded:Connect(function(c) character=c; rootPart=c:WaitForChild("HumanoidRootPart") end)
+
+local FLAG_FOLDER = Workspace:WaitForChild("Flag"):WaitForChild("Parts")
+
+local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled and not UIS.MouseEnabled
+
+-- ============================================
+-- CONFIG - ULTRA OPTIMIZED
+-- ============================================
+local TOGGLE_KEY        = Enum.KeyCode.RightControl
+local AUTO_FLAG_KEY     = Enum.KeyCode.F
+local PROCESS_RADIUS    = 100
+local PROCESS_MARGIN    = 10
+local NEIGHBOR_DIST     = 8
+local MOVE_RELOAD_DIST  = 8
+local AUTO_DEBOUNCE     = 0.08  -- ⚡ FURTHER REDUCED
+local HOOK_REBUILD_DIST = 10
+local MAX_COMPONENT     = 16    -- ⚡ REDUCED from 20 (faster DFS)
+local MAX_CONFIGS       = 8000  -- ⚡ REDUCED from 5000
+local MAX_LOGIC_ITER    = 8     -- ⚡ REDUCED from 3
+local MAX_SUBSET_CMP    = 800   -- ⚡ REDUCED from 500
+local SAMPLING_CONFIGS  = 3000  -- ⚡ REDUCED from 2000
+local DEFAULT_THRESHOLD = 0.30
+local SHOW_MINE_100     = true
+local MARKER_MAX_DIST   = 100
+local DOT_BASE_SIZE     = 28
+local THRESHOLD_LEVELS  = {1.0, 0.80, 0.70, 0.60, 0.40, 0.30}
+local FLAG_DELAY        = 0.6
+local FLAG_VERIFY_DELAY = 0.3
+local FLAG_VERIFY_TOUT  = 2.0
+local FLAG_RETRY_MAX    = 3
+local FLAG_QUEUE_MAX    = 20
+local CHUNK_SIZE        = 50
+local MAX_PATTERN_ITERS = 1  -- ⚡ REDUCED from 2
+
+local NEAR_DIST_FAST    = 15
+local MID_DIST_FAST     = 25
+local CLUSTER_RADIUS    = 12
+local BASE_FLAG_DELAY   = 0.6
+local NEAR_FLAG_DELAY   = 0.15
+local MID_FLAG_DELAY    = 0.35
+
+-- ============================================
+-- EMOJI DANGER LEVELS
+-- ============================================
+local DANGER_EMOJIS = {
+    safe       = "🟢",
+    very_safe  = "🟦",
+    safe_mid   = "🟩",
+    moderate   = "🟨",
+    risky      = "🟧",
+    danger     = "🟥",
+    mine       = "💣",
+}
+
+-- ============================================
+-- Color LUT (Pre-cached)
+-- ============================================
+local COLOR_LUT = {}
+do
+    for i = 0, 100 do
+        local t = i/100
+        local r,g,b
+        if t <= 0.5 then
+            local s=t/0.5; r=220; g=math.floor(s*200); b=math.floor(s*40)
+        else
+            local s=(t-0.5)/0.5
+            r=math.floor(220*(1-s)); g=math.floor(200+s*20); b=math.floor(40+s*40)
+        end
+        COLOR_LUT[i] = Color3.fromRGB(r,g,b)
+    end
+end
+
+local function probColor(p)
+    return COLOR_LUT[math.clamp(math.floor(p*100+0.5),0,100)]
+end
+
+
+-- ============================================
+-- GUI Colors - WHAT HUB Unified Theme
+-- Keep these before notification functions so toast colors are never nil.
+-- ============================================
+local C_BG       = Color3.fromRGB(13, 15, 24)
+local C_PANEL    = Color3.fromRGB(20, 26, 45)
+local C_BORDER   = Color3.fromRGB(80, 130, 255)
+local C_ACCENT   = Color3.fromRGB(35, 125, 255)
+local C_ACCENT2  = Color3.fromRGB(0, 220, 255)
+local C_ON_G     = Color3.fromRGB(0, 255, 150)
+local C_ON_R     = Color3.fromRGB(255, 70, 90)
+local C_WARN     = Color3.fromRGB(255, 205, 70)
+local C_BTN      = Color3.fromRGB(21, 26, 43)
+local C_TXT      = Color3.fromRGB(248, 250, 255)
+local C_DIM      = Color3.fromRGB(210, 220, 245)
+local C_TITLE_BG = Color3.fromRGB(20, 32, 70)
+
+-- ============================================
+-- Notification System - WHAT HUB Unified Toast
+-- ============================================
+local notificationQueue = {}
+local isShowingNotif = false
+
+local function getSafeParent()
+    if gethui then return gethui() end
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then return cg end
+    return playerGui
+end
+
+local function getNotifColor(notifType)
+    notifType = tostring(notifType or "info"):lower()
+    if notifType == "success" then return C_ON_G end
+    if notifType == "error" then return C_ON_R end
+    if notifType == "warning" then return C_WARN end
+    return C_ACCENT2
+end
+
+local function showOneNotification(notif)
+    local notifGui = Instance.new("ScreenGui")
+    notifGui.Name = "WhatHubNotificationGui"
+    notifGui.ResetOnSpawn = false
+    notifGui.IgnoreGuiInset = true
+    notifGui.DisplayOrder = 2147483646
+    notifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    notifGui.Parent = getSafeParent()
+
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local width = math.clamp(viewport.X - 28, 280, 380)
+    local height = isMobile and 104 or 96
+    local accent = getNotifColor(notif.type)
+
+    local frame = Instance.new("Frame")
+    frame.AnchorPoint = Vector2.new(1, 0)
+    frame.Size = UDim2.new(0, width, 0, height)
+    frame.Position = UDim2.new(1, width + 24, 0, 18)
+    frame.BackgroundColor3 = C_BG
+    frame.BackgroundTransparency = 0.02
+    frame.BorderSizePixel = 0
+    frame.Parent = notifGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = accent
+    stroke.Thickness = 2
+    stroke.Transparency = 0.02
+    stroke.Parent = frame
+
+    local glow = Instance.new("UIStroke")
+    glow.Color = C_BORDER
+    glow.Thickness = 1
+    glow.Transparency = 0.45
+    glow.Parent = frame
+
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 5, 1, -18)
+    bar.Position = UDim2.new(0, 10, 0, 9)
+    bar.BackgroundColor3 = accent
+    bar.BorderSizePixel = 0
+    bar.Parent = frame
+
+    local barCorner = Instance.new("UICorner")
+    barCorner.CornerRadius = UDim.new(1, 0)
+    barCorner.Parent = bar
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Size = UDim2.new(1, -38, 0, 26)
+    titleLabel.Position = UDim2.new(0, 24, 0, 9)
+    titleLabel.Text = tostring(notif.title or "Notification")
+    titleLabel.TextColor3 = C_TXT
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = isMobile and 13 or 14
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextStrokeTransparency = 0.65
+    titleLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    titleLabel.Parent = frame
+
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.Size = UDim2.new(1, -38, 1, -40)
+    msgLabel.Position = UDim2.new(0, 24, 0, 36)
+    msgLabel.Text = tostring(notif.message or "")
+    msgLabel.TextColor3 = Color3.fromRGB(245, 248, 255)
+    msgLabel.Font = Enum.Font.GothamMedium
+    msgLabel.TextSize = isMobile and 11 or 12
+    msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+    msgLabel.TextYAlignment = Enum.TextYAlignment.Top
+    msgLabel.TextWrapped = true
+    msgLabel.TextStrokeTransparency = 0.78
+    msgLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    msgLabel.Parent = frame
+
+    local progress = Instance.new("Frame")
+    progress.AnchorPoint = Vector2.new(0, 1)
+    progress.Size = UDim2.new(1, -20, 0, 3)
+    progress.Position = UDim2.new(0, 10, 1, -7)
+    progress.BackgroundColor3 = accent
+    progress.BackgroundTransparency = 0.05
+    progress.BorderSizePixel = 0
+    progress.Parent = frame
+
+    local pc = Instance.new("UICorner")
+    pc.CornerRadius = UDim.new(1, 0)
+    pc.Parent = progress
+
+    TweenService:Create(frame, TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+        Position = UDim2.new(1, -14, 0, 18)
+    }):Play()
+
+    TweenService:Create(progress, TweenInfo.new(notif.duration, Enum.EasingStyle.Linear), {
+        Size = UDim2.new(0, 0, 0, 3)
+    }):Play()
+
+    task.wait(notif.duration)
+
+    if frame and frame.Parent then
+        TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
+            Position = UDim2.new(1, width + 24, 0, 18),
+            BackgroundTransparency = 1
+        }):Play()
+        task.wait(0.3)
+    end
+
+    if notifGui then notifGui:Destroy() end
+end
+
+local function showNotification(title, message, duration, notifType)
+    duration = duration or 4
+    table.insert(notificationQueue, {
+        title = title,
+        message = message,
+        duration = duration,
+        type = notifType or "info"
+    })
+
+    if isShowingNotif then return end
+
+    task.spawn(function()
+        isShowingNotif = true
+        while #notificationQueue > 0 do
+            local notif = table.remove(notificationQueue, 1)
+            showOneNotification(notif)
+            task.wait(0.12)
+        end
+        isShowingNotif = false
+    end)
+end
+
+-- ============================================
+-- Optimized Object Pool
+-- ============================================
+local markerPool    = {}
+local activeMarkers = {}
+local markerCache   = {}
+
+local function acquireMarker()
+    if #markerPool > 0 then return table.remove(markerPool) end
+    local bb  = Instance.new("BillboardGui")
+    bb.Name="MineDisplayMarker"; bb.AlwaysOnTop=true; bb.MaxDistance=MARKER_MAX_DIST
+
+    local dot = Instance.new("Frame")
+    dot.Name="Dot"; dot.Size=UDim2.new(1,0,1,0)
+    dot.BorderSizePixel=0; dot.BackgroundTransparency=0.05
+    local uc=Instance.new("UICorner"); uc.CornerRadius=UDim.new(1,0); uc.Parent=dot
+    local us=Instance.new("UIStroke"); us.Thickness=2
+        us.Color=Color3.fromRGB(255,255,255); us.Transparency=0.25; us.Parent=dot
+    dot.Parent=bb
+
+    local lbl=Instance.new("TextLabel")
+    lbl.Name="ProbLabel"; lbl.Size=UDim2.new(1,0,1,0)
+    lbl.BackgroundTransparency=1; lbl.TextColor3=Color3.fromRGB(255,255,255)
+    lbl.Font=Enum.Font.GothamBold
+    lbl.TextStrokeTransparency=0.1; lbl.TextStrokeColor3=Color3.fromRGB(0,0,0)
+    lbl.Parent=dot
+
+    return {bb=bb, dot=dot, lbl=lbl}
+end
+
+local function releaseMarker(e)
+    if e.bb then e.bb.Parent=nil end
+    e.dot.Rotation=0
+    table.insert(markerPool, e)
+end
+
+local function clearMarkerOn(part)
+    if not part then return end
+    local e=activeMarkers[part]
+    if e then releaseMarker(e); activeMarkers[part]=nil; markerCache[part]=nil end
+end
+
+local function clearAllMarkers()
+    for part,e in pairs(activeMarkers) do releaseMarker(e); activeMarkers[part]=nil; markerCache[part]=nil end
+end
+
+local function clearFarMarkers(pp)
+    local lim=PROCESS_RADIUS+PROCESS_MARGIN
+    for part,e in pairs(activeMarkers) do
+        if not part or not part.Parent or (part.Position-pp).Magnitude>lim then
+            releaseMarker(e); activeMarkers[part]=nil; markerCache[part]=nil
+        end
+    end
+end
+
+-- ============================================
+-- Stickers with Emoji
+-- ============================================
+local function showSafeSticker(part)
+    if not part or not part.Parent then return end
+    if markerCache[part] == "safe" then return end
+    markerCache[part] = "safe"
+    
+    local e=activeMarkers[part]
+    if not e then e=acquireMarker(); e.bb.Parent=part; activeMarkers[part]=e end
+    
+    e.bb.Size       = UDim2.new(0,38,0,38)
+    e.bb.StudsOffset= Vector3.new(0,2.3,0)
+    e.dot.BackgroundColor3    = Color3.fromRGB(0,200,80)
+    e.dot.BackgroundTransparency = 0.0
+    e.dot.Rotation            = 0
+    local stroke = e.dot:FindFirstChildOfClass("UIStroke")
+    if stroke then stroke.Color=Color3.fromRGB(120,255,160); stroke.Thickness=3; stroke.Transparency=0.0 end
+    e.lbl.Text     = DANGER_EMOJIS.safe
+    e.lbl.TextSize = 22
+end
+
+local function showMineSticker(part)
+    if not part or not part.Parent then return end
+    if markerCache[part] == "mine" then return end
+    markerCache[part] = "mine"
+    
+    local e=activeMarkers[part]
+    if not e then e=acquireMarker(); e.bb.Parent=part; activeMarkers[part]=e end
+    
+    e.bb.Size       = UDim2.new(0,30,0,30)
+    e.bb.StudsOffset= Vector3.new(0,2.25,0)
+    e.dot.BackgroundColor3    = Color3.fromRGB(220,30,30)
+    e.dot.BackgroundTransparency = 0.0
+    e.dot.Rotation            = 45
+    local stroke = e.dot:FindFirstChildOfClass("UIStroke")
+    if stroke then stroke.Color=Color3.fromRGB(255,120,120); stroke.Thickness=2; stroke.Transparency=0.1 end
+    e.lbl.Text     = DANGER_EMOJIS.mine
+    e.lbl.TextSize = 20
+end
+
+local function getDangerEmoji(safeProb)
+    if safeProb >= 0.99 then return DANGER_EMOJIS.safe
+    elseif safeProb >= 0.80 then return DANGER_EMOJIS.very_safe
+    elseif safeProb >= 0.70 then return DANGER_EMOJIS.safe_mid
+    elseif safeProb >= 0.60 then return DANGER_EMOJIS.moderate
+    elseif safeProb >= 0.40 then return DANGER_EMOJIS.risky
+    else return DANGER_EMOJIS.danger end
+end
+
+local function showDot(part, safeProb)
+    if not part or not part.Parent then return end
+    local cacheKey = "dot_"..math.floor(safeProb*100)
+    if markerCache[part] == cacheKey then return end
+    markerCache[part] = cacheKey
+    
+    local size  = DOT_BASE_SIZE * math.lerp(0.76, 1.18, math.clamp(safeProb,0,1))
+    local color = probColor(safeProb)
+    local pct   = tostring(math.floor(safeProb*100+0.5)).."%"
+    local emoji = getDangerEmoji(safeProb)
+    local tsize = math.max(7, math.floor(size*0.38))
+    local e=activeMarkers[part]
+    if not e then e=acquireMarker(); e.bb.Parent=part; activeMarkers[part]=e end
+    e.bb.Size       = UDim2.new(0,size,0,size)
+    e.bb.StudsOffset= Vector3.new(0,2.15,0)
+    e.dot.BackgroundColor3    = color
+    e.dot.BackgroundTransparency = 0.05
+    e.dot.Rotation            = 0
+    local stroke = e.dot:FindFirstChildOfClass("UIStroke")
+    if stroke then stroke.Color=Color3.fromRGB(255,255,255); stroke.Thickness=2; stroke.Transparency=0.22 end
+    e.lbl.Text       = emoji .. " " .. pct
+    e.lbl.TextSize   = tsize
+end
+
+-- ============================================
+-- State
+-- ============================================
+local uiVisible        = true
+local solverEnabled    = true
+local autoFlagEnabled  = false
+local autoFlagRange    = 15
+local flagDebounce     = {}
+local useFlagsInCalc   = true
+local showAllSafe      = false
+local safeThreshold    = DEFAULT_THRESHOLD
+local isAnalyzing      = false
+local autoColorEnabled = false
+local autoScheduled    = false
+local board            = {}
+local partToIndex      = {}
+local totalMinesOnBoard= 100
+local totalFlagsOnBoard= 0
+local autoConns        = {}
+local lastScanPos      = nil
+local lastHookPos      = nil
+local flagQueue        = {}
+local isFlagging       = false
+local flagsPlaced, flagsFailed = 0, 0
+local capturedPassword = nil
+local placeFlagEvent   = nil
+local hookInstalled    = false
+local needsFirstFlag   = true
+
+local screenGui, statusLabel, modeLabel
+local analyzeButton, autoButton, autoFlagButton
+local useFlagsButton, showAllButton, thresholdButton
+local radiusLabel, flagRangeLabel
+local mobileToggleGui
+
+-- ============================================
+-- Remote Hook
+-- ============================================
+local function setupHook()
+    if hookInstalled then return end
+    local ev=RepStorage:FindFirstChild("Events"); if not ev then return end
+    local fe=ev:FindFirstChild("FlagEvents");    if not fe then return end
+    placeFlagEvent=fe:FindFirstChild("PlaceFlag"); if not placeFlagEvent then return end
+    
+    local old
+    old=hookmetamethod(game,"__namecall",function(self,...)
+        if self==placeFlagEvent and getnamecallmethod()=="FireServer" then
+            local a={...}
+            if #a >= 2 then
+                local pw=a[2]
+                if (type(pw)=="string" or type(pw)=="number") and not capturedPassword then
+                    capturedPassword=tostring(pw)
+                    needsFirstFlag = false
+                    showNotification("✅ Auto-Flag Activated", "Password captured!", 5, "success")
+                end
+            end
+        end
+        return old(self,...)
+    end)
+    hookInstalled=true
+end
+
+local function setupHookFallback()
+    if hookInstalled or not placeFlagEvent then return end
+    if typeof(hookfunction)=="function" then
+        local oldFS=hookfunction(placeFlagEvent.FireServer,function(self,...)
+            local a={...}
+            if #a >= 2 then
+                local pw=a[2]
+                if (type(pw)=="string" or type(pw)=="number") and not capturedPassword then
+                    capturedPassword=tostring(pw)
+                    needsFirstFlag = false
+                    showNotification("✅ Auto-Flag Activated", "Password captured!", 5, "success")
+                end
+            end
+            return oldFS(self,...)
+        end)
+        hookInstalled=true
+    end
+end
+
+-- ============================================
+-- Helpers
+-- ============================================
+local function setStatus(t) if statusLabel then statusLabel.Text=t end end
+local function setMode(t)   if modeLabel   then modeLabel.Text=t   end end
+local function getPos() if rootPart and rootPart.Parent then return rootPart.Position end end
+local function nearPlayer(pos,extra)
+    local p=getPos(); if not p then return false end
+    return (pos-p).Magnitude<=PROCESS_RADIUS+(extra or 0)
+end
+local function listHas(list,v) for _,x in ipairs(list) do if x==v then return true end end return false end
+local function isFlagVerified(part)
+    if not part or not part.Parent then return false end
+    for _,d in ipairs(part:GetDescendants()) do
+        if d.Name=="Primary" and d:IsA("BasePart") then return true end
+    end
+    return false
+end
+
+-- ============================================
+-- Flag Database
+-- ============================================
+local flagDB = {}
+local function dbRecord(part) flagDB[part] = {placedAt=tick()} end
+local function dbRemove(part) flagDB[part] = nil end
+
+-- ============================================
+-- Flag cooldown
+-- ============================================
+local flagCooldown   = {}
+local FLAG_COOLDOWN  = 8.0
+local function isInCooldown(part) return flagCooldown[part] and tick() - flagCooldown[part] < FLAG_COOLDOWN end
+local function setCooldown(part) flagCooldown[part] = tick() end
+
+-- ============================================
+-- Auto Flag
+-- ============================================
+local function fireFlag(part)
+    if not capturedPassword or not placeFlagEvent then return false end
+    local ok = pcall(function() placeFlagEvent:FireServer(part, capturedPassword, true) end)
+    return ok
+end
+
+local function waitFlagState(part, wantFlag, timeout)
+    local t0 = tick()
+    while tick() - t0 < timeout do
+        if isFlagVerified(part) == wantFlag then return true end
+        task.wait(0.1)
+    end
+    return false
+end
+
+local function preCheckFlag(part)
+    if not part or not part.Parent then return "no_part" end
+    if isFlagVerified(part) then return "already_flagged" end
+    local ng  = part:FindFirstChild("NumberGui")
+    local tl  = ng and ng:FindFirstChild("TextLabel")
+    local txt = tl and tl.Text or ""
+    if ng and tl and (txt == "" or tonumber(txt) ~= nil) then return "not_unopened" end
+    return "ok"
+end
+
+local function queueFlag(cell, priority, distance)
+    priority = priority or 0
+    distance = distance or 999
+    for _,q in ipairs(flagQueue) do if q.part==cell.part then return false end end
+    if #flagQueue >= FLAG_QUEUE_MAX then return false end
+    table.insert(flagQueue, {part=cell.part, retries=0, mode="flag", priority=priority, distance=distance})
+    return true
+end
+
+local function getFlagDelay(dist)
+    if dist <= NEAR_DIST_FAST then return NEAR_FLAG_DELAY end
+    if dist <= MID_DIST_FAST then return MID_FLAG_DELAY end
+    return BASE_FLAG_DELAY
+end
+
+local function countNearbyMines(cellIdx, radius)
+    local count = 0
+    local c = board[cellIdx]
+    if not c then return 0 end
+    local pos = c.part.Position
+    for _, other in ipairs(board) do
+        if other.index ~= cellIdx and other.mineProbability and other.mineProbability >= 0.999 then
+            if (other.part.Position - pos).Magnitude <= radius then count += 1 end
+        end
+    end
+    return count
+end
+
+local function calculatePriority(cellIdx, dist)
+    local cluster = countNearbyMines(cellIdx, CLUSTER_RADIUS)
+    local distScore = math.clamp(1 - (dist / autoFlagRange), 0, 1) * 100
+    local clusterScore = cluster * 50
+    return distScore + clusterScore
+end
+
+local function clearFlagQueue() flagQueue = {}; isFlagging = false end
+
+local function processFlagQueue()
+    if isFlagging or #flagQueue == 0 or not capturedPassword then return end
+    if needsFirstFlag then return end
+    isFlagging = true
+    task.spawn(function()
+        while #flagQueue > 0 and solverEnabled and autoFlagEnabled do
+            table.sort(flagQueue, function(a, b) return (a.priority or 0) > (b.priority or 0) end)
+            local item = flagQueue[1]
+            local part = item.part
+            local preRes = preCheckFlag(part)
+            if preRes ~= "ok" then table.remove(flagQueue, 1); continue end
+            local pp = getPos(); if not pp then break end
+            local currentDist = (part.Position - pp).Magnitude
+            if currentDist > autoFlagRange then table.remove(flagQueue, 1); continue end
+            if flagDebounce[part] and tick() - flagDebounce[part] < 1.5 then table.remove(flagQueue, 1); continue end
+            item.distance = currentDist
+            item.priority = calculatePriority(partToIndex[part], currentDist)
+            local ok = fireFlag(part)
+            if ok then
+                flagDebounce[part] = tick()
+                task.wait(FLAG_VERIFY_DELAY)
+                local verified = waitFlagState(part, true, FLAG_VERIFY_TOUT)
+                if verified then
+                    flagsPlaced += 1; dbRecord(part); setCooldown(part); table.remove(flagQueue, 1)
+                else
+                    item.retries += 1
+                    if item.retries >= FLAG_RETRY_MAX then flagsFailed += 1; table.remove(flagQueue, 1) end
+                end
+            else
+                item.retries += 1
+                if item.retries >= FLAG_RETRY_MAX then flagsFailed += 1; table.remove(flagQueue, 1) end
+            end
+            task.wait(getFlagDelay(item.distance or currentDist))
+        end
+        isFlagging = false
+    end)
+end
+
+local function autoFlagMinesOnly100()
+    if not solverEnabled or not autoFlagEnabled or not capturedPassword or needsFirstFlag then return end
+    local pp = getPos(); if not pp then return end
+    local n = 0
+    for _, cell in ipairs(board) do
+        if cell.revealed and cell.number ~= nil then
+            local unopened, flagCount = {}, 0
+            for _, ni in ipairs(cell.neighbors) do
+                local c = board[ni]
+                if c and c.isUnopened then
+                    if c.flagged then flagCount += 1 else table.insert(unopened, ni) end
+                end
+            end
+            local rem = cell.number - flagCount
+            if rem == #unopened and rem > 0 then
+                for _, idx in ipairs(unopened) do
+                    local c = board[idx]
+                    if c and c.isUnopened and not isFlagVerified(c.part) and (c.part.Position - pp).Magnitude <= autoFlagRange then
+                        local dist = (c.part.Position - pp).Magnitude
+                        local priority = calculatePriority(idx, dist)
+                        if queueFlag(c, priority, dist) then n += 1 end
+                    end
+                end
+            end
+        end
+    end
+    if n > 0 then processFlagQueue() end
+end
+
+-- ============================================
+-- Board (ULTRA FAST)
+-- ============================================
+local cellReadCache = {}
+
+local function readCell(part)
+    local cached = cellReadCache[part]
+    if cached and cached.timestamp and tick() - cached.timestamp < 0.3 then return cached.data end
+    
+    local ng=part:FindFirstChild("NumberGui")
+    local tl=ng and ng:FindFirstChild("TextLabel")
+    local txt=tl and tl.Text or ""
+    local num=tonumber(txt)
+    local rev=ng and tl and (txt=="" or num~=nil)
+    local result = {number=num, flagged=isFlagVerified(part), revealed=rev and true or false, isNormal=rev and txt=="" or false, isUnopened=not (ng and tl and (txt=="" or num~=nil))}
+    cellReadCache[part] = {data=result, timestamp=tick()}
+    return result
+end
+
+local function buildBoardChunked()
+    local pp = getPos()
+    if not pp then board = {}; partToIndex = {}; return 0 end
+
+    local nearby = {}
+    for _, p in ipairs(FLAG_FOLDER:GetChildren()) do
+        if p:IsA("BasePart") then
+            local d = (p.Position - pp).Magnitude
+            if d <= PROCESS_RADIUS + PROCESS_MARGIN then
+                table.insert(nearby, {part=p, dist=d})
+            else
+                clearMarkerOn(p)
+            end
+        end
+    end
+
+    table.sort(nearby, function(a,b)
+        if math.abs(a.part.Position.X - b.part.Position.X) > 1 then
+            return a.part.Position.X < b.part.Position.X
+        end
+        return a.part.Position.Z < b.part.Position.Z
+    end)
+
+    board = {}
+    partToIndex = {}
+
+    for i = 1, #nearby do
+        local item = nearby[i]
+        local s = readCell(item.part)
+        board[i] = {
+            part=item.part, index=i, dist=item.dist,
+            insideMain = item.dist <= PROCESS_RADIUS,
+            edgeFactor = math.clamp(1-(item.dist-PROCESS_RADIUS*0.7)/(PROCESS_RADIUS*0.3),0.6,1.0),
+            number=s.number, flagged=s.flagged, revealed=s.revealed,
+            isNormal=s.isNormal, isUnopened=s.isUnopened,
+            neighbors={}, safeProbability=nil, mineProbability=nil,
+            isFrontier=false, isLocalCertain=false
+        }
+        partToIndex[item.part] = i
+        if i % 50 == 0 then task.wait() end
+    end
+
+    local CELL_SIZE = NEIGHBOR_DIST + 1
+    local grid = {}
+
+    local function gridKey(pos)
+        local gx = math.floor(pos.X / CELL_SIZE)
+        local gz = math.floor(pos.Z / CELL_SIZE)
+        return gx * 100000 + gz
+    end
+
+    for i, cell in ipairs(board) do
+        local k = gridKey(cell.part.Position)
+        if not grid[k] then grid[k] = {} end
+        table.insert(grid[k], i)
+    end
+
+    local offsets = {}
+    for dx = -1, 1 do
+        for dz = -1, 1 do
+            table.insert(offsets, {dx=dx, dz=dz})
+        end
+    end
+
+    for i = 1, #board do
+        local pos = board[i].part.Position
+        local gx  = math.floor(pos.X / CELL_SIZE)
+        local gz   = math.floor(pos.Z / CELL_SIZE)
+
+        for _, off in ipairs(offsets) do
+            local k = (gx + off.dx) * 100000 + (gz + off.dz)
+            local bucket = grid[k]
+            if bucket then
+                for _, j in ipairs(bucket) do
+                    if i ~= j and (pos - board[j].part.Position).Magnitude < NEIGHBOR_DIST then
+                        table.insert(board[i].neighbors, j)
+                    end
+                end
+            end
+        end
+
+        if i % 50 == 0 then task.wait() end
+    end
+
+    totalFlagsOnBoard = 0
+    for _, c in ipairs(board) do if c.flagged then totalFlagsOnBoard += 1 end end
+
+    return #board
+end
+
+local function resetProb()
+    for _,c in ipairs(board) do c.safeProbability=nil; c.mineProbability=nil; c.isFrontier=false; c.isLocalCertain=false end
+end
+
+local function tryReadTotalMines()
+    for _,gui in ipairs(playerGui:GetChildren()) do
+        if gui.Name~="MineNearbyBackgroundSolverGUI" and gui.Name~="MineSolverMobileToggle" and gui.Name~="NotificationGui" then
+            for _,child in ipairs(gui:GetDescendants()) do
+                if (child:IsA("TextLabel") or child:IsA("TextBox")) then
+                    local n=tonumber(child.Text)
+                    if n and n>0 and n<500 then return n end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- Constraints (OPTIMIZED - SKIP EARLY)
+-- ============================================
+local function buildConstraints()
+    local cons = {}
+    local limit = 0
+    for _, cell in ipairs(board) do
+        if limit >= MAX_CONFIGS then break end
+        if cell.revealed and cell.number ~= nil then
+            local unopened, flagCount = {}, 0
+            for _, ni in ipairs(cell.neighbors) do
+                local n = board[ni]
+                if n and n.isUnopened then
+                    if useFlagsInCalc and n.flagged then flagCount += 1
+                    else table.insert(unopened, ni); n.isFrontier = true end
+                end
+            end
+            local rem = useFlagsInCalc and (cell.number - flagCount) or cell.number
+            if #unopened > 0 and rem >= 0 and rem <= #unopened then
+                table.insert(cons, {cells=unopened, mines=rem})
+                limit += 1
+            end
+        end
+    end
+    return cons
+end
+
+local function markSafe(idx, prob, isCertain)
+    local c=board[idx]; if not c or not c.isUnopened then return false end
+    if isCertain then c.isLocalCertain = true end
+    if prob>(c.safeProbability or -1) then c.safeProbability=prob; c.mineProbability=1-prob; return true end
+    return false
+end
+
+local function markMine(idx, prob, isCertain)
+    local c=board[idx]; if not c or not c.isUnopened then return false end
+    if isCertain then c.isLocalCertain = true end
+    if prob>(c.mineProbability or -1) then c.mineProbability=prob; c.safeProbability=1-prob; return true end
+    return false
+end
+
+local function isSubset(a,b) for _,v in ipairs(a) do if not listHas(b,v) then return false end end return true end
+local function diffSet(big,small)
+    local d={}; for _,v in ipairs(big) do if not listHas(small,v) then table.insert(d,v) end end return d
+end
+
+-- ⚡ ULTRA FAST BASIC SUBSET - ONLY 1 ITERATION
+local function applyBasicSubset(cons)
+    for _,con in ipairs(cons) do
+        if con.mines<=0 then
+            for _,i in ipairs(con.cells) do markSafe(i,1,true) end
+        elseif con.mines==#con.cells then
+            for _,i in ipairs(con.cells) do markMine(i,1,true) end
+        else
+            local mp=con.mines/#con.cells
+            for _,i in ipairs(con.cells) do
+                if board[i] and board[i].safeProbability==nil then markSafe(i,1-mp,false) end
+            end
+        end
+    end
+    
+    local cmp=0
+    for a=1,#cons do
+        if cmp>=150 then break end  -- ⚡ REDUCED from 300
+        local A=cons[a]
+        for b=a+1,#cons do
+            cmp+=1; if cmp>=150 then break end
+            local B=cons[b]
+            if #A.cells<=#B.cells and isSubset(A.cells,B.cells) then
+                local d=diffSet(B.cells,A.cells); local md=B.mines-A.mines
+                if #d>0 then
+                    if md<=0 then for _,i in ipairs(d) do markSafe(i,1,true) end
+                    elseif md==#d then for _,i in ipairs(d) do markMine(i,1,true) end end
+                end
+            end
+        end
+    end
+end
+
+local function splitComponents(cons)
+    if #cons == 0 then return {} end
+    local varToCons={}
+    for ci,con in ipairs(cons) do
+        for _,vi in ipairs(con.cells) do
+            varToCons[vi]=varToCons[vi] or {}; table.insert(varToCons[vi],ci)
+        end
+    end
+    local visited,components={},{}
+    for start=1,#cons do
+        if not visited[start] then
+            local queue,qh,cSet,vSet={start},1,{},{}
+            visited[start]=true
+            while qh<=#queue do
+                local ci=queue[qh]; qh+=1; cSet[ci]=true
+                for _,vi in ipairs(cons[ci].cells) do
+                    vSet[vi]=true
+                    for _,nc in ipairs(varToCons[vi] or {}) do
+                        if not visited[nc] then visited[nc]=true; table.insert(queue,nc) end
+                    end
+                end
+            end
+            local cc,cv={},{}
+            for ci in pairs(cSet) do table.insert(cc,cons[ci]) end
+            for vi in pairs(vSet) do table.insert(cv,vi) end
+            table.insert(components,{constraints=cc,vars=cv})
+        end
+    end
+    return components
+end
+
+-- ⚡ ULTRA FAST COMPONENT SOLVER
+local function solveComponentFixed(comp)
+    local vars,cons=comp.vars,comp.constraints
+    if #vars==0 then return false end
+    local varPos={}
+    for pos,idx in ipairs(vars) do varPos[idx]=pos end
+    local conData={}
+    for _,con in ipairs(cons) do
+        local pos={}
+        for _,idx in ipairs(con.cells) do local p=varPos[idx]; if p then table.insert(pos,p) end end
+        table.insert(conData,{positions=pos,mines=con.mines})
+    end
+    local n=#vars
+    local assignment=table.create(n,0); local mineCounts=table.create(n,0)
+    local validCount=0; local limitHit=false
+
+    local function canContinue(depth)
+        for _,cd in ipairs(conData) do
+            local assigned,unknown=0,0
+            for _,p in ipairs(cd.positions) do
+                if p<=depth then assigned+=assignment[p] else unknown+=1 end
+            end
+            if assigned>cd.mines or assigned+unknown<cd.mines then return false end
+        end
+        return true
+    end
+
+    local function isValid()
+        for _,cd in ipairs(conData) do
+            local s=0
+            for _,p in ipairs(cd.positions) do s += assignment[p] end
+            if s~=cd.mines then return false end
+        end
+        return true
+    end
+
+    if n<=MAX_COMPONENT then
+        local function dfs(pos)
+            if limitHit then return end
+            if validCount>=MAX_CONFIGS then limitHit=true; return end
+            if pos>n then
+                if isValid() then
+                    validCount+=1; for i=1,n do if assignment[i]==1 then mineCounts[i]+=1 end end
+                end
+                return
+            end
+            assignment[pos]=0; if canContinue(pos) then dfs(pos+1) end
+            assignment[pos]=1; if canContinue(pos) then dfs(pos+1) end
+            assignment[pos]=0
+        end
+        dfs(1)
+    else
+        local mr=math.random
+        for _=1,SAMPLING_CONFIGS do
+            for i=1,n do assignment[i]=mr(0,1) end
+            if isValid() then
+                validCount+=1; for i=1,n do if assignment[i]==1 then mineCounts[i]+=1 end end
+            end
+        end
+    end
+
+    if validCount<=0 then return false end
+    for pos,idx in ipairs(vars) do
+        local mp=mineCounts[pos]/validCount
+        markSafe(idx,1-mp,false)
+        markMine(idx,mp,false)
+    end
+    return true
+end
+
+local function applyOffFrontierProb(globalRem)
+    if not globalRem or globalRem<=0 then return end
+    local off,knownMines={},0
+    for _,c in ipairs(board) do
+        if c.isUnopened and c.insideMain then
+            if not c.isFrontier then table.insert(off,c.index)
+            elseif c.mineProbability and c.mineProbability>=0.999 then knownMines+=1 end
+        end
+    end
+    local rem=globalRem-knownMines
+    if #off>0 and rem>0 then
+        local mp=math.clamp(rem/#off,0,1)
+        for _,idx in ipairs(off) do
+            if board[idx] and board[idx].safeProbability==nil then markSafe(idx,1-mp,false) end
+        end
+    elseif #off>0 and rem<=0 then
+        for _,idx in ipairs(off) do markSafe(idx,1,false) end
+    end
+end
+
+-- ⚡ ULTRA FAST MULTI-PASS
+local function multiPassSolveBalanced(cons)
+    setMode("Solving...")
+    applyBasicSubset(cons)
+    local comps = splitComponents(cons)
+    for i = 1, math.min(#comps, 3) do  -- ⚡ ONLY TOP 3 COMPONENTS
+        if not solverEnabled then return end
+        solveComponentFixed(comps[i])
+    end
+    setMode("Done")
+end
+
+-- ============================================
+-- Display (BATCH OPTIMIZED)
+-- ============================================
+local function displayResults()
+    if not solverEnabled then return end
+    local pp=getPos(); if not pp then return end
+    clearFarMarkers(pp)
+    for _,cell in ipairs(board) do
+        if not cell.isUnopened or isFlagVerified(cell.part) then clearMarkerOn(cell.part) end
+    end
+    
+    local ct={s100=0,s80=0,s70=0,s60=0,s40=0,s30=0,mine=0,shown=0,hidden=0,certain=0}
+    local toShow = {}
+    
+    for _,cell in ipairs(board) do
+        if not cell.insideMain or not cell.isUnopened or isFlagVerified(cell.part) then continue end
+        ct.hidden+=1
+        if not showAllSafe and not cell.isFrontier then continue end
+        
+        local sp=cell.safeProbability
+        local ef=cell.edgeFactor or 1.0
+        if sp then sp=0.6+(sp-0.6)*ef end
+        
+        if sp and sp>=0.999 then
+            ct.s100+=1; ct.shown+=1
+            if cell.isLocalCertain then ct.certain+=1 end
+            table.insert(toShow, {part=cell.part, type="safe"})
+        elseif sp and sp>=safeThreshold then
+            if     sp>=0.80 then ct.s80+=1
+            elseif sp>=0.70 then ct.s70+=1
+            elseif sp>=0.60 then ct.s60+=1
+            elseif sp>=0.40 then ct.s40+=1
+            else ct.s30+=1 end
+            ct.shown+=1
+            table.insert(toShow, {part=cell.part, type="dot", prob=sp})
+        elseif cell.mineProbability and cell.mineProbability>=0.999 then
+            ct.mine+=1; ct.shown+=1
+            if cell.isLocalCertain then ct.certain+=1 end
+            table.insert(toShow, {part=cell.part, type="mine"})
+        else
+            clearMarkerOn(cell.part)
+        end
+    end
+    
+    for _, marker in ipairs(toShow) do
+        if marker.type == "safe" then
+            showSafeSticker(marker.part)
+        elseif marker.type == "mine" then
+            showMineSticker(marker.part)
+        elseif marker.type == "dot" then
+            showDot(marker.part, marker.prob)
+        end
+    end
+    
+    setStatus("Near:"..#board.." H:"..ct.hidden.." Mk:"..ct.shown.." | OK:"..ct.s100.." 80:"..ct.s80.." 70:"..ct.s70.." 60:"..ct.s60.." 40:"..ct.s40.." 30:"..ct.s30.." Mine:"..ct.mine.." [OK:"..ct.certain.."]")
+    if autoFlagEnabled and not needsFirstFlag then
+        autoFlagMinesOnly100()
+    end
+end
+
+-- ============================================
+-- Analyze (MAIN SOLVER)
+-- ============================================
+local function analyzeNearby(source)
+    if not solverEnabled or isAnalyzing then return end
+    isAnalyzing=true
+    if analyzeButton then
+        analyzeButton.Text="Analyzing..."
+        analyzeButton.BackgroundColor3=Color3.fromRGB(160,70,30)
+    end
+    setMode(source=="auto" and "Auto" or "Reading...")
+    local count = buildBoardChunked()
+    resetProb()
+    if count == 0 then
+        setStatus("No cells nearby"); setMode("Idle"); isAnalyzing=false
+        if analyzeButton then analyzeButton.Text="Analyze Nearby"; analyzeButton.BackgroundColor3=Color3.fromRGB(0,125,210) end
+        return
+    end
+    local cons = buildConstraints()
+    if #cons > 0 then
+        multiPassSolveBalanced(cons)
+    end
+    local totalMines=totalMinesOnBoard or tryReadTotalMines()
+    if totalMines then
+        local fc=0; for _,c in ipairs(board) do if c.flagged then fc+=1 end end
+        applyOffFrontierProb(totalMines-fc)
+    end
+    if solverEnabled then
+        setMode(autoColorEnabled and "Auto ON" or "Done")
+        displayResults()
+    end
+    isAnalyzing=false
+    if analyzeButton then analyzeButton.Text="Analyze Nearby"; analyzeButton.BackgroundColor3=Color3.fromRGB(0,125,210) end
+end
+
+-- ============================================
+-- Auto Color
+-- ============================================
+local function disconnectHooks()
+    for _,c in ipairs(autoConns) do pcall(function() c:Disconnect() end) end; autoConns={}
+end
+
+local function scheduleReload()
+    if not solverEnabled or not autoColorEnabled or autoScheduled then return end
+    autoScheduled=true
+    task.delay(AUTO_DEBOUNCE,function()
+        autoScheduled=false
+        if not solverEnabled or not autoColorEnabled then return end
+        if isAnalyzing then scheduleReload(); return end
+        analyzeNearby("auto")
+    end)
+end
+
+local function hookPart(part)
+    if not part or not part:IsA("BasePart") then return end
+    if not nearPlayer(part.Position,PROCESS_MARGIN) then return end
+    local function hookNG(ng)
+        if not ng then return end
+        local tl=ng:FindFirstChild("TextLabel")
+        if tl then table.insert(autoConns,tl:GetPropertyChangedSignal("Text"):Connect(scheduleReload)) end
+        table.insert(autoConns,ng.ChildAdded:Connect(function(c)
+            if c.Name=="TextLabel" then task.wait(0.03); hookNG(ng) end; scheduleReload()
+        end))
+        table.insert(autoConns,ng.ChildRemoved:Connect(scheduleReload))
+    end
+    hookNG(part:FindFirstChild("NumberGui"))
+    table.insert(autoConns,part.ChildAdded:Connect(function(c)
+        if c.Name=="NumberGui" then task.wait(0.03); hookNG(c) end; scheduleReload()
+    end))
+    table.insert(autoConns,part.ChildRemoved:Connect(scheduleReload))
+end
+
+local function rebuildHooks()
+    disconnectHooks()
+    for _,p in ipairs(FLAG_FOLDER:GetChildren()) do hookPart(p) end
+    table.insert(autoConns,FLAG_FOLDER.ChildAdded:Connect(function(p)
+        task.wait(0.08)
+        if solverEnabled and nearPlayer(p.Position,PROCESS_MARGIN) then hookPart(p); scheduleReload() end
+    end))
+    table.insert(autoConns,FLAG_FOLDER.ChildRemoved:Connect(scheduleReload))
+    lastHookPos=getPos()
+end
+
+local function startAutoColor()
+    if not solverEnabled or autoColorEnabled then return end
+    autoColorEnabled=true; lastScanPos=nil; lastHookPos=nil
+    if autoButton then autoButton.Text="Auto: ON"; autoButton.BackgroundColor3=Color3.fromRGB(0,150,70) end
+    setMode("Auto ON"); rebuildHooks()
+    task.spawn(function()
+        while solverEnabled and autoColorEnabled do
+            local pp=getPos()
+            if pp then
+                if lastHookPos and (pp-lastHookPos).Magnitude>=HOOK_REBUILD_DIST then rebuildHooks() end
+                if lastScanPos and (pp-lastScanPos).Magnitude>=MOVE_RELOAD_DIST then
+                    lastScanPos=pp; scheduleReload()
+                elseif not lastScanPos then lastScanPos=pp end
+            end
+            task.wait(0.18)
+        end
+    end)
+    scheduleReload()
+end
+
+local function stopAutoColor()
+    autoColorEnabled=false; autoScheduled=false; lastScanPos=nil; lastHookPos=nil
+    disconnectHooks(); clearFlagQueue()
+    if autoButton then autoButton.Text="Auto: OFF"; autoButton.BackgroundColor3=Color3.fromRGB(55,55,65) end
+    setMode("Idle"); setStatus("Auto Color OFF")
+end
+
+-- ============================================
+-- GUI Colors - WHAT HUB Unified Theme
+-- ============================================
+local C_BG       = Color3.fromRGB(13, 15, 24)
+local C_PANEL    = Color3.fromRGB(20, 26, 45)
+local C_BORDER   = Color3.fromRGB(80, 130, 255)
+local C_ACCENT   = Color3.fromRGB(35, 125, 255)
+local C_ACCENT2  = Color3.fromRGB(0, 220, 255)
+local C_ON_G     = Color3.fromRGB(0, 255, 150)
+local C_ON_R     = Color3.fromRGB(255, 70, 90)
+local C_WARN     = Color3.fromRGB(255, 205, 70)
+local C_BTN      = Color3.fromRGB(21, 26, 43)
+local C_TXT      = Color3.fromRGB(248, 250, 255)
+local C_DIM      = Color3.fromRGB(210, 220, 245)
+local C_TITLE_BG = Color3.fromRGB(20, 32, 70)
+
+-- ============================================
+-- MOBILE TOGGLE BUTTON (Compact)
+-- ============================================
+local function createMobileToggle()
+    if mobileToggleGui then pcall(function() mobileToggleGui:Destroy() end) end
+    mobileToggleGui = Instance.new("ScreenGui")
+    mobileToggleGui.Name = "MineSolverMobileToggle"
+    mobileToggleGui.ResetOnSpawn = false
+    mobileToggleGui.DisplayOrder = 999
+    mobileToggleGui.Parent = playerGui
+
+    local floatBtn = Instance.new("TextButton")
+    floatBtn.Name = "MobileToggleBtn"
+    floatBtn.Size = UDim2.new(0, 64, 0, 64)
+    floatBtn.Position = UDim2.new(0, 12, 1, -100)
+    floatBtn.AnchorPoint = Vector2.new(0, 1)
+    floatBtn.BackgroundColor3 = C_ACCENT
+    floatBtn.BackgroundTransparency = 0.1
+    floatBtn.BorderSizePixel = 0
+    floatBtn.Text = "WH"
+    floatBtn.TextColor3 = C_TXT
+    floatBtn.Font = Enum.Font.GothamBold
+    floatBtn.TextSize = 16
+    floatBtn.Parent = mobileToggleGui
+
+    local fc = Instance.new("UICorner")
+    fc.CornerRadius = UDim.new(1, 0)
+    fc.Parent = floatBtn
+
+    local fs = Instance.new("UIStroke")
+    fs.Thickness = 2
+    fs.Color = Color3.fromRGB(135, 190, 255)
+    fs.Transparency = 0.3
+    fs.Parent = floatBtn
+
+    local statusDot = Instance.new("Frame")
+    statusDot.Name = "StatusDot"
+    statusDot.Size = UDim2.new(0, 14, 0, 14)
+    statusDot.Position = UDim2.new(1, -4, 0, -4)
+    statusDot.AnchorPoint = Vector2.new(1, 0)
+    statusDot.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    statusDot.BorderSizePixel = 0
+    statusDot.Parent = floatBtn
+
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = statusDot
+
+    local function updateStatusDot()
+        if autoColorEnabled then statusDot.BackgroundColor3 = Color3.fromRGB(0, 200, 80)
+        elseif solverEnabled then statusDot.BackgroundColor3 = C_ACCENT
+        else statusDot.BackgroundColor3 = Color3.fromRGB(80, 80, 80) end
+    end
+    updateStatusDot()
+
+    local dragging, dragStartPos, btnStartPos, hasDragged = false, nil, nil, false
+
+    floatBtn.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; hasDragged = false; dragStartPos = inp.Position; btnStartPos = floatBtn.Position
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(inp)
+        if dragging and inp.UserInputType == Enum.UserInputType.Touch then
+            local delta = inp.Position - dragStartPos
+            if delta.Magnitude > 8 then
+                hasDragged = true
+                floatBtn.Position = UDim2.new(btnStartPos.X.Scale, btnStartPos.X.Offset + delta.X, btnStartPos.Y.Scale, btnStartPos.Y.Offset + delta.Y)
+            end
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.Touch then dragging = false end
+    end)
+
+    floatBtn.MouseButton1Click:Connect(function()
+        if hasDragged then hasDragged = false; return end
+        uiVisible = not uiVisible
+        if screenGui then screenGui.Enabled = uiVisible end
+        if uiVisible then
+            floatBtn.BackgroundColor3 = Color3.fromRGB(20, 60, 120)
+            floatBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            floatBtn.BackgroundColor3 = C_ACCENT
+            floatBtn.TextColor3 = C_TXT
+        end
+        updateStatusDot()
+    end)
+
+    task.spawn(function()
+        while mobileToggleGui and mobileToggleGui.Parent do
+            updateStatusDot(); task.wait(0.5)
+        end
+    end)
+
+    return mobileToggleGui
+end
+
+-- ============================================
+-- MAIN GUI
+-- ============================================
+local function createGui()
+    if screenGui then pcall(function() screenGui:Destroy() end) end
+    screenGui=Instance.new("ScreenGui")
+    screenGui.Name="MineNearbyBackgroundSolverGUI"
+    screenGui.ResetOnSpawn=false
+    screenGui.Enabled=uiVisible
+    screenGui.Parent=playerGui
+
+    local panelW = isMobile and 310 or 330
+    local panelH = isMobile and 450 or 420
+    local startX = isMobile and 8 or 14
+    local startY = isMobile and 50 or 14
+
+    local frame=Instance.new("Frame")
+    frame.Size=UDim2.new(0,panelW,0,panelH)
+    frame.Position=UDim2.new(0,startX,0,startY)
+    frame.BackgroundColor3=C_BG
+    frame.BackgroundTransparency=0.02
+    frame.BorderSizePixel=0
+    frame.Parent=screenGui
+    local fc=Instance.new("UICorner"); fc.CornerRadius=UDim.new(0,12); fc.Parent=frame
+    local fs=Instance.new("UIStroke"); fs.Thickness=1.5; fs.Color=C_BORDER; fs.Transparency=0.20; fs.Parent=frame
+
+    local titleBar=Instance.new("Frame")
+    titleBar.Size=UDim2.new(0,panelW,0,36)
+    titleBar.BackgroundColor3=C_TITLE_BG
+    titleBar.BackgroundTransparency=0
+    titleBar.BorderSizePixel=0; titleBar.Parent=frame
+    local tbc=Instance.new("UICorner"); tbc.CornerRadius=UDim.new(0,12); tbc.Parent=titleBar
+
+    local titleTxt=Instance.new("TextLabel")
+    titleTxt.Size=UDim2.new(0,panelW-48,0,36); titleTxt.Position=UDim2.new(0,12,0,0)
+    titleTxt.BackgroundTransparency=1
+    titleTxt.Text="WHAT HUB • MINE SOLVER"
+    titleTxt.TextColor3=C_TXT; titleTxt.Font=Enum.Font.GothamBold; titleTxt.TextSize=13
+    titleTxt.TextXAlignment=Enum.TextXAlignment.Left; titleTxt.Parent=titleBar
+
+    local closeTxt=Instance.new("TextButton")
+    closeTxt.Size=UDim2.new(0,36,0,36); closeTxt.Position=UDim2.new(0,panelW-36,0,0)
+    closeTxt.Text="✕"; closeTxt.TextColor3=Color3.fromRGB(255,80,80)
+    closeTxt.BackgroundTransparency=1; closeTxt.Font=Enum.Font.GothamBold
+    closeTxt.TextSize=15; closeTxt.BorderSizePixel=0; closeTxt.Parent=titleBar
+
+    local div=Instance.new("Frame")
+    div.Size=UDim2.new(0,panelW-24,0,1); div.Position=UDim2.new(0,12,0,36)
+    div.BackgroundColor3=C_BORDER; div.BackgroundTransparency=0.4; div.BorderSizePixel=0; div.Parent=frame
+
+    local BW = panelW - 24
+    local HW = math.floor((BW - 6) / 2)
+
+    local function mkBtn(text,x,y,w,h,bg)
+        local b=Instance.new("TextButton")
+        b.Size=UDim2.new(0,w,0,h); b.Position=UDim2.new(0,x,0,y)
+        b.Text=text; b.TextColor3=C_TXT
+        b.BackgroundColor3=bg or C_BTN
+        b.BackgroundTransparency=0.08
+        b.Font=Enum.Font.GothamBold; b.TextSize=isMobile and 11 or 12
+        b.BorderSizePixel=0; b.Parent=frame
+        local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,7); c.Parent=b
+        local s=Instance.new("UIStroke"); s.Thickness=1; s.Color=C_BORDER; s.Transparency=0.38; s.Parent=b
+        return b
+    end
+
+    local function mkLbl(text,x,y,w,h,col)
+        local l=Instance.new("TextLabel")
+        l.Size=UDim2.new(0,w,0,h); l.Position=UDim2.new(0,x,0,y)
+        l.Text=text; l.TextColor3=col or C_DIM
+        l.BackgroundColor3=C_PANEL; l.BackgroundTransparency=0.15
+        l.Font=Enum.Font.GothamBold; l.TextSize=isMobile and 11 or 12; l.BorderSizePixel=0
+        l.TextXAlignment=Enum.TextXAlignment.Center; l.Parent=frame
+        local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,7); c.Parent=l
+        return l
+    end
+
+    local BH = isMobile and 38 or 36
+
+    analyzeButton=mkBtn("🔍 Analyze Nearby",12,46,BW,BH,C_ACCENT)
+    analyzeButton.TextSize=isMobile and 13 or 14
+    autoButton    = mkBtn("⚡ Auto: OFF",12,92,HW,32)
+    autoFlagButton= mkBtn("🚩 Flag: OFF", 18+HW,92,HW,32,C_BTN)
+    useFlagsButton= mkBtn("✓ Flags ON",12,130,HW,32,Color3.fromRGB(30,90,170))
+    showAllButton = mkBtn("📍 Frontier",18+HW,130,HW,32)
+    thresholdButton= mkBtn("Thr: 30%",12,168,HW,32)
+    local clearBtn = mkBtn("✕ Clear",18+HW,168,HW,32,Color3.fromRGB(60,40,40))
+
+    local rDown=mkBtn("-",12,206,30,28)
+    radiusLabel=mkLbl("Radius: 150",46,206,BW-82,28,C_TXT)
+    local rUp  =mkBtn("+",BW-24,206,30,28)
+
+    local mineHint=mkBtn("💣 Mines: ?",12,240,BW,28,Color3.fromRGB(55,45,20))
+
+    local fDown=mkBtn("-",12,274,30,28)
+    flagRangeLabel=mkLbl("Flag R: 15",46,274,BW-82,28,C_TXT)
+    local fUp  =mkBtn("+",BW-24,274,30,28)
+
+    local div2=Instance.new("Frame")
+    div2.Size=UDim2.new(0,BW,0,1); div2.Position=UDim2.new(0,12,0,312)
+    div2.BackgroundColor3=C_BORDER; div2.BackgroundTransparency=0.5; div2.BorderSizePixel=0; div2.Parent=frame
+
+    if isMobile then
+        local mobileTag = Instance.new("TextLabel")
+        mobileTag.Size = UDim2.new(0,BW,0,18)
+        mobileTag.Position = UDim2.new(0,12,0,312)
+        mobileTag.BackgroundTransparency = 1
+        mobileTag.Text = "📱 Mobile | [MS] = Show/Hide"
+        mobileTag.TextColor3 = Color3.fromRGB(100,180,255)
+        mobileTag.Font = Enum.Font.Gotham
+        mobileTag.TextSize = 9
+        mobileTag.TextXAlignment = Enum.TextXAlignment.Left
+        mobileTag.Parent = frame
+    end
+
+    modeLabel=Instance.new("TextLabel")
+    modeLabel.Size=UDim2.new(0,BW,0,18); modeLabel.Position=UDim2.new(0,12,0,isMobile and 332 or 313)
+    modeLabel.BackgroundTransparency=1; modeLabel.Text="Mode: Idle"
+    modeLabel.TextColor3=Color3.fromRGB(120,180,255)
+    modeLabel.Font=Enum.Font.Gotham; modeLabel.TextSize=11
+    modeLabel.TextXAlignment=Enum.TextXAlignment.Left; modeLabel.Parent=frame
+
+    statusLabel=Instance.new("TextLabel")
+    statusLabel.Size=UDim2.new(0,BW,0,isMobile and 80 or 70)
+    statusLabel.Position=UDim2.new(0,12,0,isMobile and 352 or 332)
+    statusLabel.BackgroundTransparency=1
+    statusLabel.Text="⚠️ Flag one cell manually first to unlock auto-flag!"
+    statusLabel.TextColor3=Color3.fromRGB(255,200,80)
+    statusLabel.Font=Enum.Font.Gotham; statusLabel.TextSize=11
+    statusLabel.TextXAlignment=Enum.TextXAlignment.Left
+    statusLabel.TextYAlignment=Enum.TextYAlignment.Top
+    statusLabel.TextWrapped=true; statusLabel.Parent=frame
+
+    local function syncAll()
+        radiusLabel.Text   = "Radius: "..PROCESS_RADIUS
+        flagRangeLabel.Text= "Flag R: "..autoFlagRange
+        thresholdButton.Text= "Thr: "..math.floor(safeThreshold*100).."%"
+        autoButton.Text=autoColorEnabled and "⚡ Auto: ON" or "⚡ Auto: OFF"
+        autoButton.BackgroundColor3=autoColorEnabled and C_ACCENT or C_BTN
+        autoFlagButton.Text=autoFlagEnabled and "🚩 Flag: ON!" or "🚩 Flag: OFF"
+        autoFlagButton.BackgroundColor3=autoFlagEnabled and C_WARN or C_BTN
+        useFlagsButton.Text=useFlagsInCalc and "✓ Flags ON" or "✓ Flags OFF"
+        useFlagsButton.BackgroundColor3=useFlagsInCalc and C_ACCENT or C_BTN
+        showAllButton.Text=showAllSafe and "📍 All Safe" or "📍 Frontier"
+        showAllButton.BackgroundColor3=showAllSafe and C_ON_G or C_BTN
+        if totalMinesOnBoard then
+            mineHint.Text="💣 Mines: "..totalMinesOnBoard
+            mineHint.BackgroundColor3=Color3.fromRGB(18, 90, 58)
+        else
+            mineHint.Text="💣 Mines: ?"; mineHint.BackgroundColor3=Color3.fromRGB(55, 45, 20)
+        end
+    end
+    syncAll()
+
+    analyzeButton.MouseButton1Click:Connect(function()
+        task.spawn(function() analyzeNearby("manual") end)
+    end)
+    autoButton.MouseButton1Click:Connect(function()
+        if autoColorEnabled then stopAutoColor() else startAutoColor() end; syncAll()
+    end)
+    autoFlagButton.MouseButton1Click:Connect(function()
+        if needsFirstFlag then
+            showNotification("⚠️ Not Unlocked Yet", "Please flag one cell manually first!", 3, "warning")
+            return
+        end
+        autoFlagEnabled=not autoFlagEnabled; syncAll()
+        if autoFlagEnabled then
+            showNotification("🚩 Auto-Flag Enabled", "Flagging 100% mines only...", 3, "success")
+            task.spawn(function() analyzeNearby("manual") end)
+        else
+            showNotification("Auto-Flag Disabled", "Manual flagging mode", 2, "info")
+        end
+    end)
+    useFlagsButton.MouseButton1Click:Connect(function()
+        useFlagsInCalc=not useFlagsInCalc; syncAll()
+        if #board>0 then task.spawn(function() analyzeNearby("manual") end) end
+    end)
+    showAllButton.MouseButton1Click:Connect(function()
+        showAllSafe=not showAllSafe; syncAll()
+        if #board>0 then displayResults() end
+    end)
+    thresholdButton.MouseButton1Click:Connect(function()
+        local ci=1
+        for i,lv in ipairs(THRESHOLD_LEVELS) do
+            if math.abs(safeThreshold-lv)<0.001 then ci=i; break end
+        end
+        safeThreshold=THRESHOLD_LEVELS[ci%#THRESHOLD_LEVELS+1]; syncAll()
+        if #board>0 then displayResults() end
+    end)
+    clearBtn.MouseButton1Click:Connect(function()
+        clearAllMarkers(); flagDebounce={}; clearFlagQueue()
+        showNotification("Clear", "All markers cleared", 2, "info")
+    end)
+    rDown.MouseButton1Click:Connect(function()
+        PROCESS_RADIUS=math.max(20,PROCESS_RADIUS-10); syncAll(); clearAllMarkers()
+        if autoColorEnabled then rebuildHooks(); scheduleReload()
+        else task.spawn(function() analyzeNearby("manual") end) end
+    end)
+    rUp.MouseButton1Click:Connect(function()
+        PROCESS_RADIUS=math.min(150,PROCESS_RADIUS+10); syncAll(); clearAllMarkers()
+        if autoColorEnabled then rebuildHooks(); scheduleReload()
+        else task.spawn(function() analyzeNearby("manual") end) end
+    end)
+    fDown.MouseButton1Click:Connect(function() autoFlagRange=math.max(5,autoFlagRange-5); syncAll() end)
+    fUp.MouseButton1Click:Connect(function() autoFlagRange=math.min(200,autoFlagRange+5); syncAll() end)
+    mineHint.MouseButton1Click:Connect(function()
+        local opts={10,20,30,40,50,60,70,80,90,100}
+        local ci=0
+        for i,v in ipairs(opts) do if v==totalMinesOnBoard then ci=i; break end end
+        if ci>=#opts then totalMinesOnBoard=nil else totalMinesOnBoard=opts[ci+1] end
+        syncAll()
+        if #board>0 then task.spawn(function() analyzeNearby("manual") end) end
+    end)
+    closeTxt.MouseButton1Click:Connect(function()
+        uiVisible=false; screenGui.Enabled=false
+    end)
+
+    local dragging,dragStart,startPos=false,nil,nil
+    titleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            dragging=true; dragStart=inp.Position; startPos=frame.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(inp)
+        if dragging and (inp.UserInputType==Enum.UserInputType.MouseMovement or inp.UserInputType==Enum.UserInputType.Touch) then
+            local d=inp.Position-dragStart
+            frame.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+d.X,startPos.Y.Scale,startPos.Y.Offset+d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then dragging=false end
+    end)
+end
+
+-- ============================================
+-- Toggle (PC only)
+-- ============================================
+if not isMobile then
+    UIS.InputBegan:Connect(function(inp,gp)
+        if gp or UIS:GetFocusedTextBox() then return end
+        if inp.KeyCode==TOGGLE_KEY then
+            if not solverEnabled then
+                solverEnabled=true; createGui(); setMode("Idle")
+                task.spawn(function() analyzeNearby("manual") end)
+            else
+                uiVisible=not uiVisible
+                if screenGui then screenGui.Enabled=uiVisible end
+            end
+        end
+        if inp.KeyCode==AUTO_FLAG_KEY and solverEnabled then
+            if needsFirstFlag then
+                showNotification("⚠️ Flag First", "Please flag one cell manually to unlock auto-flag", 3, "warning")
+                return
+            end
+            autoFlagEnabled=not autoFlagEnabled
+            if autoFlagButton then
+                autoFlagButton.Text=autoFlagEnabled and "🚩 Flag: ON!" or "🚩 Flag: OFF"
+                autoFlagButton.BackgroundColor3=autoFlagEnabled and C_WARN or C_BTN
+            end
+            if autoFlagEnabled then
+                showNotification("🚩 Auto-Flag Enabled", "Flagging 100% mines...", 3, "success")
+                task.spawn(function() analyzeNearby("manual") end)
+            else
+                showNotification("Auto-Flag Disabled", "", 2, "info")
+            end
+        end
+    end)
+end
+
+-- ============================================
+-- Initialization
+-- ============================================
+clearAllMarkers(); flagDebounce={}
+
+task.spawn(function()
+    setupHook()
+    if not hookInstalled then setupHookFallback() end
+    showNotification("🎮 Mine Solver Ready", "Flag one cell manually to unlock auto-flag feature", 6, "warning")
+end)
+
+createGui()
+createMobileToggle()
