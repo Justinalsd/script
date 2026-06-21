@@ -1172,7 +1172,9 @@ function sendBattleWebhook(data)
 			petInfo ..= "\nSell Locked: Yes"
 		end
 
-		if type(data.Pet.SkillMatches) == "table" and #data.Pet.SkillMatches > 0 then
+		if type(data.Pet.AllSkills) == "table" and #data.Pet.AllSkills > 0 then
+			petInfo ..= "\nSkills: " .. table.concat(data.Pet.AllSkills, ", ")
+		elseif type(data.Pet.SkillMatches) == "table" and #data.Pet.SkillMatches > 0 then
 			petInfo ..= "\nSkills: " .. table.concat(data.Pet.SkillMatches, ", ")
 		end
 
@@ -2143,20 +2145,21 @@ function formatSessionRuntime()
 end
 
 TIER_SCORE = {
-	Secret = 1000000,
-	Divine = 900000,
-	Exotic = 800000,
-	Exclusive = 700000,
-	Mythic = 600000,
-	Legendary = 500000,
-	Epic = 400000,
-	Rare = 300000,
+	Secret = 1200000,
+	Prismatic = 1100000,
+	Divine = 1000000,
+	Exotic = 900000,
+	Exclusive = 800000,
+	Mythic = 700000,
+	Legendary = 600000,
+	Epic = 500000,
+	Rare = 400000,
 	Uncommon = 200000,
 	Common = 100000,
 }
 
 
-STEAL_PRIORITY_NAME_SCORE = 1e18
+STEAL_PRIORITY_NAME_SCORE = 1e250
 
 function getStealPriorityNameScore(petName)
 	if petName and isPriorityPet(petName) then
@@ -5692,10 +5695,10 @@ function chestScoreReward(reward)
 	local health = chestRewardStat(reward, "health")
 	local amount = chestRewardAmount(reward)
 	local tierBase = tonumber(TIER_BASE_SCORE) or 1000000000
-	local criteriaTier = stealUseTier ~= false and getgenv().EtherHubStealUseTier ~= false
-	local criteriaLevel = stealUseLevel ~= false and getgenv().EtherHubStealUseLevel ~= false
-	local criteriaDamage = stealUseDamage ~= false and getgenv().EtherHubStealUseDamage ~= false
-	local criteriaHealth = stealUseHealth ~= false and getgenv().EtherHubStealUseHealth ~= false
+	local criteriaTier = rewardUseTier()
+	local criteriaLevel = rewardUseLevel()
+	local criteriaDamage = rewardUseDamage()
+	local criteriaHealth = rewardUseHealth()
 	local amountScore = (rtype == "pet" or rtype == "hat") and 0 or amount
 
 	return (CHEST_TYPE_BASE_SCORE[rtype] or CHEST_TYPE_BASE_SCORE.other)
@@ -6466,24 +6469,24 @@ function handleClaimSkip()
 end
 
 REWARD_TIER_WEIGHT = {
-	Secret = 14,
-	Prismatic = 12,
-	Divine = 11,
-	Exotic = 10,
-	Exclusive = 13,
-	Mythic = 8,
+	Secret = 12,
+	Prismatic = 11,
+	Divine = 10,
+	Exotic = 9,
+	Exclusive = 8,
+	Mythic = 7,
 	Legendary = 6,
-	Epic = 4,
-	Rare = 3,
+	Epic = 5,
+	Rare = 4,
 	Uncommon = 2,
 	Common = 1,
 	[""] = 0,
 }
 
-TIER_BASE_SCORE = 1000000000
+TIER_BASE_SCORE = 1e150
 WEIGHT_LEVEL    = 6000
-WEIGHT_DAMAGE   = 35
-WEIGHT_HEALTH   = 12
+WEIGHT_DAMAGE   = 80
+WEIGHT_HEALTH   = 10
 
 REWARD_POWER_WEIGHT = {
 	LEVEL = WEIGHT_LEVEL,
@@ -6493,20 +6496,68 @@ REWARD_POWER_WEIGHT = {
 	AMOUNT_FORGE = 0,
 }
 
+function getStealCoreCriteriaState()
+	normalizeStealCriteria()
+
+	local states = {
+		Tier = stealUseTier ~= false and getgenv().EtherHubStealUseTier ~= false,
+		Level = stealUseLevel ~= false and getgenv().EtherHubStealUseLevel ~= false,
+		Damage = stealUseDamage ~= false and getgenv().EtherHubStealUseDamage ~= false,
+		Health = stealUseHealth ~= false and getgenv().EtherHubStealUseHealth ~= false,
+	}
+
+	local enabled, total = 0, 0
+	for _, value in pairs(states) do
+		total += 1
+		if value then enabled += 1 end
+	end
+
+	local useDefault = enabled == 0 or enabled == total
+	return states, useDefault, enabled, total
+end
+
+function isStealCoreCriterionActive(name)
+	local states, useDefault = getStealCoreCriteriaState()
+	if useDefault then
+		return true
+	end
+	return states[name] == true
+end
+
+function getStealSkillFilterState()
+	normalizeStealSkillCriteria()
+
+	local enabled, total = 0, 0
+	for skillName in pairs(STEAL_SKILL_DEFAULTS) do
+		total += 1
+		if stealSkillCriteria[skillName] == true then
+			enabled += 1
+		end
+	end
+
+	if enabled == 0 then
+		return "none", enabled, total
+	elseif enabled == total then
+		return "all", enabled, total
+	end
+
+	return "subset", enabled, total
+end
+
 function rewardUseTier()
-	return stealUseTier ~= false and getgenv().EtherHubStealUseTier ~= false
+	return isStealCoreCriterionActive("Tier")
 end
 
 function rewardUseLevel()
-	return stealUseLevel ~= false and getgenv().EtherHubStealUseLevel ~= false
+	return isStealCoreCriterionActive("Level")
 end
 
 function rewardUseDamage()
-	return stealUseDamage ~= false and getgenv().EtherHubStealUseDamage ~= false
+	return isStealCoreCriterionActive("Damage")
 end
 
 function rewardUseHealth()
-	return stealUseHealth ~= false and getgenv().EtherHubStealUseHealth ~= false
+	return isStealCoreCriterionActive("Health")
 end
 
 function calcStealRewardScore(tierWeight, level, damage, health)
@@ -6537,7 +6588,12 @@ SKILL_BASE_SCORE = 25000000000
 SKILL_EXTRA_SCORE = 750000000
 
 function rewardUseSkill()
-	return stealUseSkill ~= false and getgenv().EtherHubStealUseSkill ~= false
+	if stealUseSkill == false or getgenv().EtherHubStealUseSkill == false then
+		return false
+	end
+
+	local state = getStealSkillFilterState()
+	return state == "subset"
 end
 
 function loadEtherHubPetSkillFile()
@@ -6669,6 +6725,28 @@ function getSkillScoreByPetName(petName)
 	for skillName in pairs(matched) do out[#out + 1] = skillName end
 	table.sort(out)
 	return score, out
+end
+
+function getAllSkillTypesByPetName(petName)
+	local record = getPetSkillRecordByName(petName)
+	if type(record) ~= "table" or type(record.abilities) ~= "table" then
+		return {}
+	end
+
+	local found = {}
+	for _, ability in ipairs(record.abilities) do
+		if type(ability) == "table" and ability.hatEffect ~= true then
+			local types = abilitySkillTypes(ability)
+			for skillName in pairs(types) do
+				found[skillName] = true
+			end
+		end
+	end
+
+	local out = {}
+	for skillName in pairs(found) do out[#out + 1] = skillName end
+	table.sort(out)
+	return out
 end
 
 function parseRewardNumber(v)
@@ -7411,6 +7489,7 @@ function updateLastStolenPetFromCard(card)
 
 	local petName = getRewardPetNameFromCard(card) or text[1] or "Unknown"
 	local skillScore, skillMatches = getSkillScoreByPetName(petName)
+	local allSkills = getAllSkillTypesByPetName(petName)
 	local inventoryFull, inventoryDisplay = getPetInventoryDisplayAfterSteal()
 
 	lastStolenPet = {
@@ -7426,6 +7505,7 @@ function updateLastStolenPetFromCard(card)
 		SellLocked = isPetSellLocked(petName),
 		SkillScore = skillScore or 0,
 		SkillMatches = skillMatches or {},
+		AllSkills = allSkills or {},
 	}
 
 	if pendingWebhookData then
@@ -8628,7 +8708,6 @@ local function getNameList(kind)
 end
 
 local function createNameEditor(name, icon, kind)
-    local isStealNameEditor = tostring(kind or ""):lower() == "steal"
     local rowH = math.floor((isMobile and 218 or 242) * scale)
     local row = makeRow(name, icon, 0, rowH)
     row.ClipsDescendants = true
@@ -8643,7 +8722,7 @@ local function createNameEditor(name, icon, kind)
     input.Position = UDim2.new(0, 10, 0, math.floor(36 * scale))
     input.BackgroundColor3 = Color3.fromRGB(35, 45, 80)
     input.TextColor3 = Color3.fromRGB(255, 255, 255)
-    input.PlaceholderText = isStealNameEditor and "Pet name to steal..." or "Pet name to protect..."
+    input.PlaceholderText = "Pet name..."
     input.ClearTextOnFocus = false
     input.Text = ""
     input.Font = Enum.Font.Gotham
@@ -8762,7 +8841,7 @@ local function createNameEditor(name, icon, kind)
             empty.Font = Enum.Font.GothamSemibold
             empty.TextSize = TEXT_11
             empty.TextXAlignment = Enum.TextXAlignment.Left
-            empty.Text = isStealNameEditor and "  No steal target names added yet" or "  No sell lock names added yet"
+            empty.Text = "  No names added yet"
             empty.BorderSizePixel = 0
             empty.Parent = listFrame
             newCorner(empty, 6)
@@ -8786,7 +8865,7 @@ local function createNameEditor(name, icon, kind)
             lbl.TextSize = TEXT_11
             lbl.TextXAlignment = Enum.TextXAlignment.Left
             lbl.TextTruncate = Enum.TextTruncate.AtEnd
-            lbl.Text = (isStealNameEditor and "🎯 " or "🔒 ") .. petName
+            lbl.Text = "✓ " .. petName
             lbl.Parent = entry
 
             local x = Instance.new("TextButton")
@@ -8811,14 +8890,14 @@ local function createNameEditor(name, icon, kind)
         local petName = input.Text
         addName(petName)
         rebuild()
-        setStatus((isStealNameEditor and "Added steal target: " or "Added sell lock: ") .. tostring(petName), Color3.fromRGB(0, 220, 255))
+        setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
     end)
     bindPress(delBtn, function()
         local petName = input.Text
         removeName(petName)
         input.Text = ""
         rebuild()
-        setStatus((isStealNameEditor and "Removed steal target: " or "Removed sell lock: ") .. tostring(petName), Color3.fromRGB(255, 170, 0))
+        setStatus("Removed " .. tostring(petName), Color3.fromRGB(255, 170, 0))
     end)
     bindPress(clearBtn, function()
         clearNames()
@@ -8830,7 +8909,7 @@ local function createNameEditor(name, icon, kind)
             local petName = input.Text
             addName(petName)
             rebuild()
-            setStatus((isStealNameEditor and "Added steal target: " or "Added sell lock: ") .. tostring(petName), Color3.fromRGB(0, 220, 255))
+            setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
         end
     end)
     rebuild()
@@ -9284,11 +9363,9 @@ sectionTitle("Battle Pet Lock", "🐾")
 createBattlePetLockScreen()
 
 setCategory("Locks")
-sectionTitle("Steal Target Names", "🎯")
-createNameEditor("Pets to Steal", "🎯", "steal")
-
-sectionTitle("Sell Lock Names", "🔒")
-createNameEditor("Pets Protected from Sell", "🐶", "sell")
+sectionTitle("Name Locks", "✍")
+createNameEditor("Steal Priority Name", "🎯", "steal")
+createNameEditor("Sell Lock Name", "🐶", "sell")
 
 setCategory("Settings")
 sectionTitle("Sell Settings", "📦")
