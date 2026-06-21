@@ -7717,7 +7717,6 @@ function updateLastStolenPetFromRewardEntry(entry, profile, sourceName, score)
 		RewardType = rewardType,
 		RewardIndex = entry.index,
 		RewardScore = score,
-		ProfileSource = sourceName or (type(cardData) == "table" and "GetData Profile" or "UI Card"),
 		ImageId = imageId,
 		InventoryFull = inventoryFull,
 		Inventory = inventoryDisplay,
@@ -7870,9 +7869,9 @@ function chooseBestRewardEntry(cards)
 		end
 
 		if bestEntry and bestEntry.frame then
-			updateLastStolenPetFromRewardEntry(bestEntry, profile, "GetData Profile", bestScore)
+			updateLastStolenPetFromRewardEntry(bestEntry, profile, nil, bestScore)
 			local petName = lastStolenPet and lastStolenPet.Name or "Unknown"
-			setStatus("Reward: " .. tostring(petName) .. " | GetData profile", Color3.fromRGB(0, 255, 150))
+			setStatus("Reward: " .. tostring(petName), Color3.fromRGB(0, 255, 150))
 			return bestEntry, "getdata_profile_" .. tostring(matchReason) .. "_reward_" .. tostring(petName) .. "_score_" .. tostring(bestScore)
 		end
 	end
