@@ -1164,12 +1164,24 @@ function sendBattleWebhook(data)
 			tostring(data.Pet.Health)
 		)
 
-		if data.Pet.PriorityMatched then
-			petInfo ..= "\nPriority: Yes"
+		if data.Pet.Tier and tostring(data.Pet.Tier) ~= "" then
+			petInfo ..= "\nTier: " .. tostring(data.Pet.Tier)
+		end
+
+		if data.Pet.RewardType and tostring(data.Pet.RewardType) ~= "" then
+			petInfo ..= "\nReward Type: " .. tostring(data.Pet.RewardType)
+		end
+
+		if data.Pet.ProfileSource and tostring(data.Pet.ProfileSource) ~= "" then
+			petInfo ..= "\nReward Source: " .. tostring(data.Pet.ProfileSource)
+		end
+
+		if data.Pet.TargetMatched or data.Pet.PriorityMatched then
+			petInfo ..= "\nTarget Name: Yes"
 		end
 
 		if data.Pet.SellLocked then
-			petInfo ..= "\nSell Locked: Yes"
+			petInfo ..= "\nProtected From Sell: Yes"
 		end
 
 		if type(data.Pet.AllSkills) == "table" and #data.Pet.AllSkills > 0 then
@@ -2159,80 +2171,98 @@ TIER_SCORE = {
 }
 
 
+-- Pet Target Name score: this is intentionally higher than every tier/stat/skill score,
+-- so matching target names are always selected first. Existing config key remains
+-- stealPriorityPets for backward compatibility.
 STEAL_PRIORITY_NAME_SCORE = 1e250
+PET_TARGET_NAME_SCORE = STEAL_PRIORITY_NAME_SCORE
 
-function getStealPriorityNameScore(petName)
-	if petName and isPriorityPet(petName) then
-		return STEAL_PRIORITY_NAME_SCORE
-	end
-	return 0
+function hasStealPriorityTargets()
+	normalizePetNameLists()
+	return type(stealPriorityPets) == "table" and next(stealPriorityPets) ~= nil
 end
 
-function hasStealPriorityPetTargets()
-	normalizePetNameLists()
-	for _, enabled in pairs(stealPriorityPets or {}) do
-		if enabled == true then
-			return true
+function getStealPriorityMatchFromText(text)
+	if not hasStealPriorityTargets() then
+		return nil
+	end
+
+	local raw = tostring(text or "")
+	local blob = normalizePetName(raw)
+	if blob == "" then
+		return nil
+	end
+
+	for normalized in pairs(stealPriorityPets) do
+		local target = normalizePetName(normalized)
+		if target ~= "" and (blob == target or blob:find(target, 1, true)) then
+			return resolvePetName(target) or target
 		end
 	end
-	return false
+
+	return nil
 end
 
-function rewardEntryMatchesPetTarget(entry, profile)
-	if type(entry) ~= "table" then return false, nil end
+function getStealPriorityMatchFromCard(card)
+	if not card then return nil end
+	local raw, blob = getRewardCardText(card)
+	return getStealPriorityMatchFromText(raw or blob or "")
+end
+
+function getStealPriorityMatchFromProfileCard(cardData)
+	if type(cardData) ~= "table" then return nil end
+
+	local directName = nil
+	if type(getRewardProfilePetName) == "function" then
+		directName = getRewardProfilePetName(cardData)
+	else
+		directName = cardData.name or cardData.title or cardData.displayName or cardData.petName or cardData.PetName or cardData.id or cardData.petId
+	end
+
+	if directName and isPriorityPet(directName) then
+		return resolvePetName(directName) or tostring(directName)
+	end
+
+	local text = ""
+	if type(rewardCardProfileText) == "function" then
+		text = rewardCardProfileText(cardData)
+	else
+		local parts = {}
+		for _, key in ipairs({"rewardType", "name", "title", "displayName", "petName", "PetName", "id", "petId", "tierName", "tier", "rarity", "quality", "lane"}) do
+			if cardData[key] ~= nil then parts[#parts + 1] = tostring(cardData[key]) end
+		end
+		text = table.concat(parts, " ")
+	end
+
+	return getStealPriorityMatchFromText(text)
+end
+
+function getStealPriorityMatchFromEntry(entry, profile)
+	if type(entry) ~= "table" then return nil end
 
 	local cardData = nil
 	if type(profile) == "table" and type(profile.cards) == "table" then
 		cardData = profile.cards[entry.index]
 	end
 
-	local names = {}
-	if type(cardData) == "table" then
-		table.insert(names, cardData.name)
-		table.insert(names, cardData.title)
-		table.insert(names, cardData.petName)
-		table.insert(names, cardData.displayName)
-	end
+	local fromProfile = getStealPriorityMatchFromProfileCard(cardData)
+	if fromProfile then return fromProfile end
 
-	if entry.frame then
-		table.insert(names, getRewardPetNameFromCard(entry.frame))
-	end
+	local fromCard = getStealPriorityMatchFromCard(entry.frame)
+	if fromCard then return fromCard end
 
-	for _, name in ipairs(names) do
-		if name and tostring(name) ~= "" and isPriorityPet(name) then
-			return true, tostring(name)
-		end
-	end
-
-	return false, nil
+	return nil
 end
 
-function pickBestTargetRewardEntry(cards, profile)
-	if not hasStealPriorityPetTargets() then
-		return nil, "no_pet_targets"
+function getStealPriorityNameScore(petName)
+	if petName and isPriorityPet(petName) then
+		return STEAL_PRIORITY_NAME_SCORE
 	end
-
-	local bestEntry = nil
-	local bestScore = -math.huge
-	local bestName = nil
-
-	for _, entry in ipairs(cards or {}) do
-		local matched, targetName = rewardEntryMatchesPetTarget(entry, profile)
-		if matched then
-			local score = getCombinedRewardScore(entry, profile)
-			if score > bestScore then
-				bestScore = score
-				bestEntry = entry
-				bestName = targetName
-			end
-		end
+	local matched = getStealPriorityMatchFromText(petName)
+	if matched then
+		return STEAL_PRIORITY_NAME_SCORE
 	end
-
-	if bestEntry then
-		return bestEntry, "pet_target_" .. tostring(bestName or "matched") .. "_score_" .. tostring(bestScore)
-	end
-
-	return nil, "pet_targets_not_visible"
+	return 0
 end
 
 Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -2286,6 +2316,7 @@ function saveConfig()
 		autoFarmKeybind = autoFarmKeybind,
 		sellLockPets = sellLockPets,
 		stealPriorityPets = stealPriorityPets,
+		petTargetPets = stealPriorityPets,
 		webhookUrl = webhookUrl,
 		discordUserId = discordUserId,
 		autoSelectBestEnabled = autoSelectBestEnabled,
@@ -2369,7 +2400,9 @@ function loadConfig()
 	if type(data.sellLockPets) == "table" then
 		sellLockPets = normalizePetNameStorage(data.sellLockPets)
 	end
-	if type(data.stealPriorityPets) == "table" then
+	if type(data.petTargetPets) == "table" then
+		stealPriorityPets = normalizePetNameStorage(data.petTargetPets)
+	elseif type(data.stealPriorityPets) == "table" then
 		stealPriorityPets = normalizePetNameStorage(data.stealPriorityPets)
 	end
 	if type(data.sellTierLock) == "table" then
@@ -3320,6 +3353,35 @@ function EtherHubCore.GetStealName(name)
 	return isPriorityPet(name)
 end
 
+function EtherHubCore.GetPetTargetNames()
+	return getStealPriorityPetNameList()
+end
+
+function EtherHubCore.SetPetTargetName(name, value)
+	return setStealPriorityPet(name, value == true)
+end
+
+function EtherHubCore.AddPetTargetName(name)
+	return addStealPriorityPetName(name)
+end
+
+function EtherHubCore.RemovePetTargetName(name)
+	return removeStealPriorityPetName(name)
+end
+
+function EtherHubCore.TogglePetTargetName(name)
+	return toggleStealPriorityPetName(name)
+end
+
+function EtherHubCore.ClearPetTargetNames()
+	return clearStealPriorityPetNames()
+end
+
+function EtherHubCore.GetPetTargetName(name)
+	return isPriorityPet(name)
+end
+
+
 getgenv().EtherHubSetPetSellLock = setPetSellLock
 getgenv().EtherHubGetPetSellLock = isPetSellLocked
 getgenv().EtherHubAddSellLockPetName = addPetSellLockName
@@ -3345,6 +3407,12 @@ getgenv().EtherHubGetStealPriorityPetNames = getStealPriorityPetNameList
 getgenv().EtherHubAddStealName = addStealPriorityPetName
 getgenv().EtherHubRemoveStealName = removeStealPriorityPetName
 getgenv().EtherHubGetStealName = isPriorityPet
+getgenv().EtherHubSetPetTargetName = setStealPriorityPet
+getgenv().EtherHubGetPetTargetName = isPriorityPet
+getgenv().EtherHubAddPetTargetName = addStealPriorityPetName
+getgenv().EtherHubRemovePetTargetName = removeStealPriorityPetName
+getgenv().EtherHubTogglePetTargetName = toggleStealPriorityPetName
+getgenv().EtherHubGetPetTargetNames = getStealPriorityPetNameList
 
 function EtherHubCore.GetPetNameLevelLocks()
 	normalizePetNameLevelLock()
@@ -7014,7 +7082,13 @@ function oldRewardScore(card)
 		local level, damage, health = getUiRewardPower(card)
 		score = calcStealRewardScore(tierWeight, level, damage, health)
 		local petName = getRewardPetNameFromCard(card)
-		score += getStealPriorityNameScore(petName)
+		local targetMatch = getStealPriorityMatchFromCard(card)
+		if targetMatch then
+			petName = targetMatch
+			score += STEAL_PRIORITY_NAME_SCORE
+		else
+			score += getStealPriorityNameScore(petName)
+		end
 		if rewardUseSkill() then
 			score += getSkillScoreByPetName(petName)
 		end
@@ -7197,7 +7271,13 @@ function serverRewardScore(cardData)
 
 	local score = calcStealRewardScore(tierWeight, level, damage, health)
 	local petName = cardData.name or cardData.title
-	score += getStealPriorityNameScore(petName)
+	local targetMatch = getStealPriorityMatchFromProfileCard(cardData)
+	if targetMatch then
+		petName = targetMatch
+		score += STEAL_PRIORITY_NAME_SCORE
+	else
+		score += getStealPriorityNameScore(petName)
+	end
 	if rewardUseSkill() then
 		score += getSkillScoreByPetName(petName)
 	end
@@ -7533,6 +7613,126 @@ function getPetInventoryDisplayAfterSteal()
 	return inventoryFull, display
 end
 
+function getRewardProfileCardData(entry, profile)
+	if type(entry) ~= "table" or type(profile) ~= "table" or type(profile.cards) ~= "table" then
+		return nil
+	end
+	return profile.cards[entry.index]
+end
+
+function getRewardProfilePetName(cardData)
+	if type(cardData) ~= "table" then return nil end
+
+	local keys = {
+		"name",
+		"title",
+		"displayName",
+		"petName",
+		"PetName",
+		"animalName",
+		"id",
+		"petId",
+	}
+
+	for _, key in ipairs(keys) do
+		local value = cardData[key]
+		if value ~= nil and tostring(value) ~= "" then
+			return tostring(value)
+		end
+	end
+
+	return nil
+end
+
+function getRewardProfileTierName(cardData)
+	if type(cardData) ~= "table" then return "" end
+	local value = cardData.tierName or cardData.tier or cardData.rarity or cardData.quality or cardData.chestTier
+	return value and tostring(value) or ""
+end
+
+function getRewardProfileRewardType(cardData)
+	if type(cardData) ~= "table" then return "" end
+	local value = cardData.rewardType or cardData.lane or cardData.type or cardData.kind
+	return value and tostring(value) or ""
+end
+
+function updateLastStolenPetFromRewardEntry(entry, profile, sourceName, score)
+	if type(entry) ~= "table" or not entry.frame then return end
+
+	local card = entry.frame
+	local cardData = getRewardProfileCardData(entry, profile)
+	local level, damage, health = getUiRewardPower(card)
+	local tierName = ""
+	local rewardType = ""
+	local profilePetName = nil
+
+	if type(cardData) == "table" then
+		profilePetName = getRewardProfilePetName(cardData)
+		tierName = getRewardProfileTierName(cardData)
+		rewardType = getRewardProfileRewardType(cardData)
+
+		level = math.max(tonumber(level) or 0, getDeepRewardNumber(cardData, {
+			level = true,
+			lvl = true,
+		}))
+		damage = math.max(tonumber(damage) or 0, getDeepRewardNumber(cardData, {
+			damage = true,
+			dmg = true,
+			atk = true,
+			attack = true,
+			power = true,
+		}))
+		health = math.max(tonumber(health) or 0, getDeepRewardNumber(cardData, {
+			health = true,
+			hp = true,
+			life = true,
+		}))
+	end
+
+	local imageId = nil
+	local imageLabel = card:FindFirstChild("ImageLabel", true)
+	if imageLabel and imageLabel:IsA("ImageLabel") then
+		imageId = imageLabel.Image
+	end
+
+	local uiPetName = getRewardPetNameFromCard(card)
+	local targetMatch = getStealPriorityMatchFromEntry(entry, profile)
+	local petName = targetMatch or profilePetName or uiPetName or "Unknown"
+	local skillScore, skillMatches = getSkillScoreByPetName(petName)
+	local allSkills = getAllSkillTypesByPetName(petName)
+	local inventoryFull, inventoryDisplay = getPetInventoryDisplayAfterSteal()
+
+	lastStolenPet = {
+		Name = petName,
+		StealName = petName,
+		Level = level or 0,
+		Damage = damage or 0,
+		Health = health or 0,
+		Tier = tierName,
+		RewardType = rewardType,
+		RewardIndex = entry.index,
+		RewardScore = score,
+		ProfileSource = sourceName or (type(cardData) == "table" and "GetData Profile" or "UI Card"),
+		ImageId = imageId,
+		InventoryFull = inventoryFull,
+		Inventory = inventoryDisplay,
+		TargetMatched = targetMatch ~= nil or isPriorityPet(petName),
+		PriorityMatched = targetMatch ~= nil or isPriorityPet(petName),
+		SellLocked = isPetSellLocked(petName),
+		SkillScore = skillScore or 0,
+		SkillMatches = skillMatches or {},
+		AllSkills = allSkills or {},
+	}
+
+	if pendingWebhookData then
+		pendingWebhookData.Pet = lastStolenPet
+		task.spawn(function()
+			sendBattleWebhook(pendingWebhookData)
+		end)
+		pendingWebhookData = nil
+	end
+end
+
 function updateLastStolenPetFromCard(card)
 	if not card then return end
 
@@ -7554,7 +7754,8 @@ function updateLastStolenPetFromCard(card)
 		imageId = imageLabel.Image
 	end
 
-	local petName = getRewardPetNameFromCard(card) or text[1] or "Unknown"
+	local targetMatch = getStealPriorityMatchFromCard(card)
+	local petName = targetMatch or getRewardPetNameFromCard(card) or text[1] or "Unknown"
 	local skillScore, skillMatches = getSkillScoreByPetName(petName)
 	local allSkills = getAllSkillTypesByPetName(petName)
 	local inventoryFull, inventoryDisplay = getPetInventoryDisplayAfterSteal()
@@ -7568,8 +7769,8 @@ function updateLastStolenPetFromCard(card)
 		ImageId = imageId,
 		InventoryFull = inventoryFull,
 		Inventory = inventoryDisplay,
-		PriorityMatched = isPriorityPet(petName),
-		TargetMatched = isPriorityPet(petName),
+		TargetMatched = targetMatch ~= nil or isPriorityPet(petName),
+		PriorityMatched = targetMatch ~= nil or isPriorityPet(petName),
 		SellLocked = isPetSellLocked(petName),
 		SkillScore = skillScore or 0,
 		SkillMatches = skillMatches or {},
@@ -7622,12 +7823,20 @@ function getCombinedRewardScore(entry, profile)
 	local score = calcStealRewardScore(tierWeight, level, damage, health)
 	local petName = nil
 	if type(cardData) == "table" then
-		petName = cardData.name or cardData.title
+		petName = getRewardProfilePetName(cardData) or cardData.name or cardData.title
 	end
 	if not petName or tostring(petName) == "" then
 		petName = getRewardPetNameFromCard(card)
 	end
-	score += getStealPriorityNameScore(petName)
+
+	local targetMatch = getStealPriorityMatchFromEntry(entry, profile)
+	if targetMatch then
+		petName = targetMatch
+		score += STEAL_PRIORITY_NAME_SCORE
+	else
+		score += getStealPriorityNameScore(petName)
+	end
+
 	if rewardUseSkill() then
 		score += getSkillScoreByPetName(petName)
 	end
@@ -7640,20 +7849,12 @@ function chooseBestRewardEntry(cards)
 	end
 
 	local profile, matchReason = findMatchingRewardProfile(cards)
-
-	local targetEntry, targetReason = pickBestTargetRewardEntry(cards, profile)
-	if targetEntry and targetEntry.frame then
-		updateLastStolenPetFromCard(targetEntry.frame)
-		return targetEntry, tostring(targetReason)
-	end
-
 	if profile and type(profile.cards) == "table" then
 		local bestEntry = nil
 		local bestScore = -math.huge
 
 		for _, entry in ipairs(cards) do
-			local cardData = profile.cards[entry.index]
-			local s = serverRewardScore(cardData)
+			local s = getCombinedRewardScore(entry, profile)
 
 			if s > bestScore then
 				bestScore = s
@@ -7662,8 +7863,10 @@ function chooseBestRewardEntry(cards)
 		end
 
 		if bestEntry and bestEntry.frame then
-			updateLastStolenPetFromCard(bestEntry.frame)
-			return bestEntry, "getdata_profile_" .. tostring(matchReason) .. "_score_" .. tostring(bestScore)
+			updateLastStolenPetFromRewardEntry(bestEntry, profile, "GetData Profile", bestScore)
+			local petName = lastStolenPet and lastStolenPet.Name or "Unknown"
+			setStatus("Reward: " .. tostring(petName) .. " | GetData profile", Color3.fromRGB(0, 255, 150))
+			return bestEntry, "getdata_profile_" .. tostring(matchReason) .. "_reward_" .. tostring(petName) .. "_score_" .. tostring(bestScore)
 		end
 	end
 
@@ -7672,8 +7875,10 @@ function chooseBestRewardEntry(cards)
 	end)
 
 	if cards[1] and cards[1].frame then
-		updateLastStolenPetFromCard(cards[1].frame)
-		return cards[1], "ui_fallback_" .. tostring(matchReason)
+		updateLastStolenPetFromRewardEntry(cards[1], nil, "UI Card", oldRewardScore(cards[1].frame))
+		local petName = lastStolenPet and lastStolenPet.Name or "Unknown"
+		setStatus("Reward: " .. tostring(petName) .. " | UI fallback", Color3.fromRGB(255, 200, 80))
+		return cards[1], "ui_fallback_" .. tostring(matchReason) .. "_reward_" .. tostring(petName)
 	end
 
 	return nil, "ui_fallback_no_card_" .. tostring(matchReason)
@@ -8442,7 +8647,7 @@ local SettingPage = createPage("Settings")
 createTab("Farm", "⚔ Farm")
 createTab("Reward", "🎁 Reward")
 createTab("BattlePet", "🐾 Battle")
-createTab("Locks", "🔒 Pet Filters")
+createTab("Locks", "🔒 Steal / Sell")
 createTab("Settings", "⚙ Setup")
 
 local activeParent = FarmPage
@@ -8771,12 +8976,26 @@ local function createMultiSelectMenu(name, icon, items, getSummary)
 end
 
 local function getNameList(kind)
+    -- Uses the direct normalized storage system, while keeping the current UI unchanged.
+    safeCall(function()
+        if normalizePetNameLists then normalizePetNameLists() end
+    end)
+
+    local storage = kind == "steal" and stealPriorityPets or sellLockPets
     local list = {}
-    if kind == "steal" then
-        list = safeCall(function() return EtherHubCore.GetStealPriorityPetNames and EtherHubCore.GetStealPriorityPetNames() end) or {}
-    else
-        list = safeCall(function() return EtherHubCore.GetSellLockPetNames and EtherHubCore.GetSellLockPetNames() end) or {}
+
+    if type(getPetNameStorageList) == "function" then
+        list = getPetNameStorageList(storage) or {}
+    elseif type(storage) == "table" then
+        for normalized in pairs(storage) do
+            list[#list + 1] = {
+                key = normalized,
+                name = (type(resolvePetName) == "function" and (resolvePetName(normalized) or normalized)) or normalized,
+                locked = true,
+            }
+        end
     end
+
     if type(list) ~= "table" then return {} end
     table.sort(list, function(a, b) return tostring(a.name or a.key):lower() < tostring(b.name or b.key):lower() end)
     return list
@@ -8786,6 +9005,18 @@ local function createNameEditor(name, icon, kind)
     local rowH = math.floor((isMobile and 218 or 242) * scale)
     local row = makeRow(name, icon, 0, rowH)
     row.ClipsDescendants = true
+
+    local hint = Instance.new("TextLabel")
+    hint.Name = "Hint"
+    hint.BackgroundTransparency = 1
+    hint.Size = UDim2.new(1, -20, 0, math.floor(16 * scale))
+    hint.Position = UDim2.new(0, 10, 0, math.floor(20 * scale))
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+    hint.TextColor3 = Color3.fromRGB(160, 175, 205)
+    hint.Font = Enum.Font.Gotham
+    hint.TextSize = TEXT_10
+    hint.Text = kind == "steal" and "Used only when choosing pets to steal" or "Used only to protect pets from auto-sell"
+    hint.Parent = row
 
     local inputH = math.floor((isMobile and 28 or 30) * scale)
     local addW = math.floor((isMobile and 48 or 56) * scale)
@@ -8797,7 +9028,7 @@ local function createNameEditor(name, icon, kind)
     input.Position = UDim2.new(0, 10, 0, math.floor(36 * scale))
     input.BackgroundColor3 = Color3.fromRGB(35, 45, 80)
     input.TextColor3 = Color3.fromRGB(255, 255, 255)
-    input.PlaceholderText = "Pet name..."
+    input.PlaceholderText = kind == "steal" and "Add pet name for STEAL list..." or "Add pet name for NO-SELL list..."
     input.ClearTextOnFocus = false
     input.Text = ""
     input.Font = Enum.Font.Gotham
@@ -8860,46 +9091,79 @@ local function createNameEditor(name, icon, kind)
     end)
 
     local function addName(petName)
-        petName = tostring(petName or "")
-        if petName:gsub("%s+", "") == "" then return end
-        if kind == "steal" then
-            safeCall(function()
-                if EtherHubCore.AddStealName then EtherHubCore.AddStealName(petName)
-                elseif EtherHubCore.SetStealName then EtherHubCore.SetStealName(petName, true) end
-            end)
-        else
-            safeCall(function()
-                if EtherHubCore.AddSellLockPetName then EtherHubCore.AddSellLockPetName(petName)
-                elseif EtherHubCore.SetSellLockPetName then EtherHubCore.SetSellLockPetName(petName, true) end
-            end)
+        local entered = tostring(petName or "")
+        if entered:gsub("%s+", "") == "" then return false, nil end
+
+        local resolved = entered
+        if type(resolvePetName) == "function" then
+            resolved = resolvePetName(entered) or entered
         end
+
+        local normalized = type(normalizePetName) == "function" and normalizePetName(resolved) or tostring(resolved):lower()
+        if normalized == "" then return false, nil end
+
+        if kind == "steal" then
+            if type(setStealPriorityPet) == "function" then
+                setStealPriorityPet(resolved, true)
+            else
+                stealPriorityPets = type(stealPriorityPets) == "table" and stealPriorityPets or {}
+                stealPriorityPets[normalized] = true
+            end
+        else
+            if type(setPetSellLock) == "function" then
+                setPetSellLock(resolved, true)
+            else
+                sellLockPets = type(sellLockPets) == "table" and sellLockPets or {}
+                sellLockPets[normalized] = true
+            end
+        end
+
         input.Text = ""
+        safeCall(function() if normalizePetNameLists then normalizePetNameLists() end end)
         coreSave()
+        return true, resolved
     end
 
     local function removeName(petName)
-        petName = tostring(petName or "")
-        if petName:gsub("%s+", "") == "" then return end
-        if kind == "steal" then
-            safeCall(function()
-                if EtherHubCore.RemoveStealName then EtherHubCore.RemoveStealName(petName)
-                elseif EtherHubCore.SetStealName then EtherHubCore.SetStealName(petName, false) end
-            end)
-        else
-            safeCall(function()
-                if EtherHubCore.RemoveSellLockPetName then EtherHubCore.RemoveSellLockPetName(petName)
-                elseif EtherHubCore.SetSellLockPetName then EtherHubCore.SetSellLockPetName(petName, false) end
-            end)
+        local entered = tostring(petName or "")
+        if entered:gsub("%s+", "") == "" then return false, nil end
+
+        local resolved = entered
+        if type(resolvePetName) == "function" then
+            resolved = resolvePetName(entered) or entered
         end
+
+        local normalized = type(normalizePetName) == "function" and normalizePetName(resolved) or tostring(resolved):lower()
+        if normalized == "" then return false, nil end
+
+        if kind == "steal" then
+            if type(setStealPriorityPet) == "function" then
+                setStealPriorityPet(resolved, false)
+            elseif type(stealPriorityPets) == "table" then
+                stealPriorityPets[normalized] = nil
+            end
+        else
+            if type(setPetSellLock) == "function" then
+                setPetSellLock(resolved, false)
+            elseif type(sellLockPets) == "table" then
+                sellLockPets[normalized] = nil
+            end
+        end
+
+        safeCall(function() if normalizePetNameLists then normalizePetNameLists() end end)
         coreSave()
+        return true, resolved
     end
 
     local function clearNames()
         if kind == "steal" then
-            safeCall(function() if EtherHubCore.ClearStealNames then EtherHubCore.ClearStealNames() end end)
+            stealPriorityPets = {}
+            safeCall(function() if EtherHubCore and EtherHubCore.ClearStealNames then EtherHubCore.ClearStealNames() end end)
         else
-            safeCall(function() if EtherHubCore.ClearSellLockPetNames then EtherHubCore.ClearSellLockPetNames() end end)
+            sellLockPets = {}
+            safeCall(function() if EtherHubCore and EtherHubCore.ClearSellLockPetNames then EtherHubCore.ClearSellLockPetNames() end end)
         end
+        safeCall(function() if normalizePetNameLists then normalizePetNameLists() end end)
         coreSave()
     end
 
@@ -8916,7 +9180,7 @@ local function createNameEditor(name, icon, kind)
             empty.Font = Enum.Font.GothamSemibold
             empty.TextSize = TEXT_11
             empty.TextXAlignment = Enum.TextXAlignment.Left
-            empty.Text = "  No names added yet"
+            empty.Text = kind == "steal" and "  No names in STEAL list yet" or "  No names in NO-SELL list yet"
             empty.BorderSizePixel = 0
             empty.Parent = listFrame
             newCorner(empty, 6)
@@ -8963,16 +9227,20 @@ local function createNameEditor(name, icon, kind)
 
     bindPress(addBtn, function()
         local petName = input.Text
-        addName(petName)
+        local ok, resolved = addName(petName)
         rebuild()
-        setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
+        if ok then
+            setStatus((kind == "steal" and "Added to STEAL list: " or "Added to NO-SELL list: ") .. tostring(resolved or petName), Color3.fromRGB(0, 220, 255))
+        end
     end)
     bindPress(delBtn, function()
         local petName = input.Text
-        removeName(petName)
+        local ok, resolved = removeName(petName)
         input.Text = ""
         rebuild()
-        setStatus("Removed " .. tostring(petName), Color3.fromRGB(255, 170, 0))
+        if ok then
+            setStatus("Removed " .. tostring(resolved or petName), Color3.fromRGB(255, 170, 0))
+        end
     end)
     bindPress(clearBtn, function()
         clearNames()
@@ -8982,9 +9250,11 @@ local function createNameEditor(name, icon, kind)
     input.FocusLost:Connect(function(enterPressed)
         if enterPressed then
             local petName = input.Text
-            addName(petName)
+            local ok, resolved = addName(petName)
             rebuild()
-            setStatus("Added " .. tostring(petName), Color3.fromRGB(0, 220, 255))
+            if ok then
+                setStatus((kind == "steal" and "Added to STEAL list: " or "Added to NO-SELL list: ") .. tostring(resolved or petName), Color3.fromRGB(0, 220, 255))
+            end
         end
     end)
     rebuild()
@@ -9438,9 +9708,9 @@ sectionTitle("Battle Pet Lock", "🐾")
 createBattlePetLockScreen()
 
 setCategory("Locks")
-sectionTitle("Name Locks", "✍")
-createNameEditor("Steal Priority Name", "🎯", "steal")
-createNameEditor("Sell Lock Name", "🐶", "sell")
+sectionTitle("Pet Name Rules", "📋")
+createNameEditor("Steal Target Names", "🎯", "steal")
+createNameEditor("Protected From Selling", "🛡", "sell")
 
 setCategory("Settings")
 sectionTitle("Sell Settings", "📦")
