@@ -3299,6 +3299,19 @@ function EtherHubCore.SetPetNameLevelLock(key, value)
 	return petNameLevelLock[key] == true
 end
 
+function EtherHubCore.ClearPetNameLevelLocks()
+	normalizePetNameLevelLock()
+	local changed = false
+	for key in pairs(petNameLevelLock) do
+		petNameLevelLock[key] = nil
+		changed = true
+	end
+	if changed then
+		saveConfig()
+	end
+	return true
+end
+
 function EtherHubCore.GetPetInventoryLockList()
 	normalizePetNameLevelLock()
 	local data = getPlayerData("all")
@@ -8268,10 +8281,12 @@ end
 
 local FarmPage = createPage("Farm")
 local RewardPage = createPage("Reward")
+local BattlePetPage = createPage("BattlePet")
 local LockPage = createPage("Locks")
 local SettingPage = createPage("Settings")
 createTab("Farm", "⚔ Farm")
 createTab("Reward", "🎁 Reward")
+createTab("BattlePet", "🐾 Battle")
 createTab("Locks", "🔒 Locks")
 createTab("Settings", "⚙ Setup")
 
@@ -8390,10 +8405,10 @@ function createActionRow(name, icon, buttonText, callback)
 end
 
 local function createAdjuster(name, icon, value, minValue, maxValue, callback)
-    local row = makeRow(name, icon, isMobile and 118 or 132)
+    local row = makeRow(name, icon, isMobile and 126 or 142)
     local bw = isMobile and math.floor(25 * scale) or 28
     local bh = isMobile and math.floor(25 * scale) or 28
-    local aw = isMobile and math.floor(42 * scale) or 46
+    local aw = isMobile and math.floor(52 * scale) or 58
 
     local minus = Instance.new("TextButton")
     minus.Size = UDim2.new(0, bw, 0, bh)
@@ -8406,16 +8421,22 @@ local function createAdjuster(name, icon, value, minValue, maxValue, callback)
     minus.Parent = row
     newCorner(minus, 6)
 
-    local amount = Instance.new("TextLabel")
+    local amount = Instance.new("TextBox")
     amount.Size = UDim2.new(0, aw, 0, bh)
     amount.Position = UDim2.new(1, -(aw + bw + 16), 0.5, -math.floor(bh / 2))
     amount.BackgroundColor3 = Color3.fromRGB(12, 18, 35)
     amount.Text = tostring(value)
+    amount.PlaceholderText = "0"
+    amount.ClearTextOnFocus = false
     amount.TextColor3 = Color3.fromRGB(120, 190, 255)
+    amount.PlaceholderColor3 = Color3.fromRGB(70, 100, 140)
     amount.Font = Enum.Font.GothamBold
     amount.TextSize = TEXT_12
+    amount.TextXAlignment = Enum.TextXAlignment.Center
+    amount.BorderSizePixel = 0
     amount.Parent = row
     newCorner(amount, 6)
+    newStroke(amount, Color3.fromRGB(65, 105, 170), 0.35, 1)
 
     local plus = Instance.new("TextButton")
     plus.Size = UDim2.new(0, bw, 0, bh)
@@ -8428,13 +8449,29 @@ local function createAdjuster(name, icon, value, minValue, maxValue, callback)
     plus.Parent = row
     newCorner(plus, 6)
 
-    local current = tonumber(value) or 0
+    local current = math.clamp(math.floor(tonumber(value) or minValue), minValue, maxValue)
+    amount.Text = tostring(current)
+
     local function setValue(v)
-        current = math.clamp(math.floor(tonumber(v) or current), minValue, maxValue)
+        local n = tonumber(tostring(v or ""):match("%-?%d+"))
+        if not n then n = current end
+        current = math.clamp(math.floor(n), minValue, maxValue)
         amount.Text = tostring(current)
         callback(current)
         coreSave()
     end
+
+    amount:GetPropertyChangedSignal("Text"):Connect(function()
+        local clean = tostring(amount.Text or ""):gsub("[^%d%-]", "")
+        if clean ~= amount.Text then
+            amount.Text = clean
+        end
+    end)
+
+    amount.FocusLost:Connect(function()
+        setValue(amount.Text)
+    end)
+
     bindPress(minus, function() setValue(current - 1) end)
     bindPress(plus, function() setValue(current + 1) end)
 end
@@ -8910,6 +8947,225 @@ local function createPetLockMenu()
     setExpanded(false)
 end
 
+local function createBattlePetLockScreen()
+    local rowH = math.floor((isMobile and 360 or 390) * scale)
+    local row = makeRow("Battle Pet Lock Screen", "🐾", 0, rowH)
+    row.ClipsDescendants = true
+
+    local topY = math.floor(36 * scale)
+    local btnH = math.floor((isMobile and 28 or 30) * scale)
+    local gap = math.floor(6 * scale)
+    local refreshW = math.floor((isMobile and 70 or 82) * scale)
+    local clearW = math.floor((isMobile and 76 or 92) * scale)
+
+    local search = Instance.new("TextBox")
+    search.Name = "BattlePetLockSearch"
+    search.Size = UDim2.new(1, -(refreshW + clearW + gap * 4 + 20), 0, btnH)
+    search.Position = UDim2.new(0, 10, 0, topY)
+    search.BackgroundColor3 = Color3.fromRGB(35, 45, 80)
+    search.TextColor3 = Color3.fromRGB(255, 255, 255)
+    search.PlaceholderText = "Search pet name / tier / level..."
+    search.ClearTextOnFocus = false
+    search.Text = ""
+    search.Font = Enum.Font.Gotham
+    search.TextSize = TEXT_10
+    search.BorderSizePixel = 0
+    search.Parent = row
+    newCorner(search, 7)
+    newStroke(search, Color3.fromRGB(65, 105, 170), 0.45, 1)
+
+    local refreshBtn = Instance.new("TextButton")
+    refreshBtn.Size = UDim2.new(0, refreshW, 0, btnH)
+    refreshBtn.Position = UDim2.new(1, -(refreshW + clearW + gap + 10), 0, topY)
+    refreshBtn.BackgroundColor3 = Color3.fromRGB(35, 115, 185)
+    refreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    refreshBtn.Font = Enum.Font.GothamBold
+    refreshBtn.TextSize = TEXT_10
+    refreshBtn.Text = "Refresh"
+    refreshBtn.BorderSizePixel = 0
+    refreshBtn.Parent = row
+    newCorner(refreshBtn, 7)
+
+    local clearBtn = Instance.new("TextButton")
+    clearBtn.Size = UDim2.new(0, clearW, 0, btnH)
+    clearBtn.Position = UDim2.new(1, -(clearW + 10), 0, topY)
+    clearBtn.BackgroundColor3 = Color3.fromRGB(145, 45, 50)
+    clearBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    clearBtn.Font = Enum.Font.GothamBold
+    clearBtn.TextSize = TEXT_10
+    clearBtn.Text = "Clear All"
+    clearBtn.BorderSizePixel = 0
+    clearBtn.Parent = row
+    newCorner(clearBtn, 7)
+
+    local info = Instance.new("TextLabel")
+    info.BackgroundTransparency = 1
+    info.Size = UDim2.new(1, -20, 0, math.floor(22 * scale))
+    info.Position = UDim2.new(0, 10, 0, topY + btnH + math.floor(4 * scale))
+    info.TextColor3 = Color3.fromRGB(165, 190, 230)
+    info.Font = Enum.Font.GothamSemibold
+    info.TextSize = TEXT_10
+    info.TextXAlignment = Enum.TextXAlignment.Left
+    info.TextTruncate = Enum.TextTruncate.AtEnd
+    info.Text = "Loading inventory pets..."
+    info.Parent = row
+
+    local listTop = topY + btnH + math.floor(30 * scale)
+    local list = Instance.new("ScrollingFrame")
+    list.Name = "BattlePetLockList"
+    list.Size = UDim2.new(1, -18, 1, -(listTop + 10))
+    list.Position = UDim2.new(0, 9, 0, listTop)
+    list.BackgroundColor3 = Color3.fromRGB(12, 18, 35)
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = isMobile and 4 or 3
+    list.CanvasSize = UDim2.new(0, 0, 0, 0)
+    list.Parent = row
+    newCorner(list, 8)
+    newStroke(list, Color3.fromRGB(65, 105, 170), 0.70, 1)
+
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.Padding = UDim.new(0, 5)
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Parent = list
+    listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        list.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 8)
+    end)
+
+    local lastItems = {}
+    local function clearList()
+        for _, child in ipairs(list:GetChildren()) do
+            if child:IsA("GuiObject") then child:Destroy() end
+        end
+    end
+
+    local function getFilteredItems(items)
+        local q = tostring(search.Text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if q == "" then return items end
+        local out = {}
+        for _, item in ipairs(items) do
+            local text = (tostring(item.name or "") .. " " .. tostring(item.tier or "") .. " lv" .. tostring(item.level or "")):lower()
+            if text:find(q, 1, true) then
+                out[#out + 1] = item
+            end
+        end
+        return out
+    end
+
+    local function countLocked(items)
+        local count = 0
+        for _, item in ipairs(items or {}) do
+            if item.locked == true then count += 1 end
+        end
+        return count
+    end
+
+    local function redrawList()
+        clearList()
+        local shown = getFilteredItems(lastItems)
+        info.Text = "Selected: " .. tostring(countLocked(lastItems)) .. " / " .. tostring(#lastItems) .. "   Showing: " .. tostring(#shown)
+
+        if #lastItems == 0 then
+            local empty = Instance.new("TextLabel")
+            empty.Size = UDim2.new(1, -8, 0, SMALL_ROW_H)
+            empty.BackgroundColor3 = Color3.fromRGB(70, 42, 42)
+            empty.TextColor3 = Color3.fromRGB(255, 220, 220)
+            empty.Font = Enum.Font.GothamSemibold
+            empty.TextSize = TEXT_10
+            empty.TextXAlignment = Enum.TextXAlignment.Left
+            empty.Text = "  No pets found. Open inventory once, then Refresh."
+            empty.BorderSizePixel = 0
+            empty.Parent = list
+            newCorner(empty, 6)
+            return
+        end
+
+        if #shown == 0 then
+            local empty = Instance.new("TextLabel")
+            empty.Size = UDim2.new(1, -8, 0, SMALL_ROW_H)
+            empty.BackgroundColor3 = Color3.fromRGB(21, 26, 43)
+            empty.TextColor3 = Color3.fromRGB(170, 180, 200)
+            empty.Font = Enum.Font.GothamSemibold
+            empty.TextSize = TEXT_10
+            empty.TextXAlignment = Enum.TextXAlignment.Left
+            empty.Text = "  No pets match the search."
+            empty.BorderSizePixel = 0
+            empty.Parent = list
+            newCorner(empty, 6)
+            return
+        end
+
+        for _, item in ipairs(shown) do
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, -8, 0, math.floor((isMobile and 36 or 38) * scale))
+            btn.BackgroundColor3 = item.locked and Color3.fromRGB(25, 78, 120) or Color3.fromRGB(21, 26, 43)
+            btn.TextColor3 = Color3.fromRGB(235, 240, 255)
+            btn.Font = Enum.Font.GothamBold
+            btn.TextSize = TEXT_10
+            btn.TextXAlignment = Enum.TextXAlignment.Left
+            btn.TextTruncate = Enum.TextTruncate.AtEnd
+            btn.BorderSizePixel = 0
+            local countText = (tonumber(item.count) or 0) > 1 and (" x" .. tostring(item.count)) or ""
+            btn.Text = "  " .. (item.locked and "✓ LOCK  " or "□       ") .. tostring(item.name or "Unknown") .. "  Lv." .. tostring(item.level or 0) .. countText .. "  [" .. tostring(item.tier or "?") .. "]"
+            btn.Parent = list
+            newCorner(btn, 6)
+            bindPress(btn, function()
+                item.locked = not item.locked
+                safeCall(function()
+                    if EtherHubCore.SetPetNameLevelLock then
+                        EtherHubCore.SetPetNameLevelLock(item.key, item.locked)
+                    end
+                end)
+                setStatus((item.locked and "Locked " or "Unlocked ") .. tostring(item.name or "Pet") .. " Lv." .. tostring(item.level or 0), Color3.fromRGB(0, 220, 255))
+                redrawList()
+            end)
+        end
+    end
+
+    local function refreshPets()
+        local items = safeCall(function()
+            return EtherHubCore.GetPetInventoryLockList and EtherHubCore.GetPetInventoryLockList()
+        end) or {}
+        if type(items) ~= "table" then items = {} end
+        lastItems = items
+        redrawList()
+    end
+
+    bindPress(refreshBtn, function()
+        refreshPets()
+        setStatus("Battle pet lock list refreshed", Color3.fromRGB(0, 220, 255))
+    end)
+
+    bindPress(clearBtn, function()
+        local cleared = false
+        safeCall(function()
+            if EtherHubCore.ClearPetNameLevelLocks then
+                EtherHubCore.ClearPetNameLevelLocks()
+                cleared = true
+            end
+        end)
+        if not cleared then
+            for _, item in ipairs(lastItems) do
+                item.locked = false
+                safeCall(function()
+                    if EtherHubCore.SetPetNameLevelLock then
+                        EtherHubCore.SetPetNameLevelLock(item.key, false)
+                    end
+                end)
+            end
+        end
+        for _, item in ipairs(lastItems) do item.locked = false end
+        redrawList()
+        setStatus("Cleared all battle pet locks", Color3.fromRGB(255, 170, 0))
+    end)
+
+    search:GetPropertyChangedSignal("Text"):Connect(function()
+        redrawList()
+    end)
+
+    refreshPets()
+    return { refresh = refreshPets, row = row }
+end
+
 local function getStealCriterion(name, fallback)
     local value = safeCall(function() return EtherHubCore.GetStealCriterion and EtherHubCore.GetStealCriterion(name) end)
     if type(value) == "boolean" then return value end
@@ -9022,12 +9278,14 @@ for _, tier in ipairs({"Secret", "Prismatic", "Divine", "Exotic", "Exclusive", "
 end
 createMultiSelectMenu("Sell Tier Lock", "🔒", tierItems, function() return summaryFromPairs(tierItems) end)
 
+setCategory("BattlePet")
+sectionTitle("Battle Pet Lock", "🐾")
+createBattlePetLockScreen()
+
 setCategory("Locks")
 sectionTitle("Name Locks", "✍")
 createNameEditor("Steal Priority Name", "🎯", "steal")
 createNameEditor("Sell Lock Name", "🐶", "sell")
-sectionTitle("Inventory Lock", "🐾")
-createPetLockMenu()
 
 setCategory("Settings")
 sectionTitle("Sell Settings", "📦")
