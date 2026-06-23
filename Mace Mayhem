@@ -1,0 +1,942 @@
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+local InfiniteJumpEnabled = false
+local JumpPowerEnabled = false
+local WalkSpeedEnabled = false
+local WalkSpeed = 16
+local TracersEnabled = false
+local TracerLines = {}
+local Camera = workspace.CurrentCamera
+-- Remove old GUI
+local old = PlayerGui:FindFirstChild("EtherHub")
+if old then
+	old:Destroy()
+end
+
+--------------------------------------------------
+-- SCREEN GUI
+--------------------------------------------------
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "EtherHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = PlayerGui
+
+--------------------------------------------------
+-- MAIN FRAME
+--------------------------------------------------
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0, 350, 0, 430)
+Main.Position = UDim2.new(0.5, -175, 0.5, -215)
+Main.BackgroundColor3 = Color3.fromRGB(12,16,28)
+Main.BorderSizePixel = 0
+Main.Parent = ScreenGui
+
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0,10)
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(52,180,255)
+MainStroke.Thickness = 1
+MainStroke.Parent = Main
+
+--------------------------------------------------
+-- DRAGGING
+--------------------------------------------------
+
+local dragging = false
+local dragStart
+local startPos
+
+Main.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+		local delta = input.Position - dragStart
+
+		Main.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+--------------------------------------------------
+-- HEADER
+--------------------------------------------------
+
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1,0,0,48)
+Header.BackgroundColor3 = Color3.fromRGB(18,28,54)
+Header.BorderSizePixel = 0
+Header.Parent = Main
+
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0,10)
+
+local Gradient = Instance.new("UIGradient")
+Gradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(34,78,165)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(12,21,42))
+})
+Gradient.Parent = Header
+
+local Accent = Instance.new("Frame")
+Accent.Size = UDim2.new(1,0,0,2)
+Accent.Position = UDim2.new(0,0,1,-2)
+Accent.BackgroundColor3 = Color3.fromRGB(0,220,255)
+Accent.BorderSizePixel = 0
+Accent.Parent = Header
+
+local Title = Instance.new("TextLabel")
+Title.BackgroundTransparency = 1
+Title.Size = UDim2.new(1,-70,1,0)
+Title.Position = UDim2.new(0,16,0,0)
+Title.Text = "EtherHub - Mace Mayhem"
+Title.TextColor3 = Color3.new(1,1,1)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
+
+--------------------------------------------------
+-- MINIMIZE BUTTON
+--------------------------------------------------
+
+local Minimized = false
+
+local MinButton = Instance.new("TextButton")
+MinButton.Size = UDim2.new(0,32,0,32)
+MinButton.Position = UDim2.new(1,-42,0.5,-16)
+MinButton.BackgroundColor3 = Color3.fromRGB(255,190,40)
+MinButton.Text = "−"
+MinButton.TextColor3 = Color3.fromRGB(20,20,20)
+MinButton.Font = Enum.Font.GothamBold
+MinButton.TextSize = 22
+MinButton.Parent = Header
+
+Instance.new("UICorner", MinButton).CornerRadius = UDim.new(1,0)
+
+--------------------------------------------------
+-- STATUS LABEL
+--------------------------------------------------
+
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1,-24,0,34)
+Status.Position = UDim2.new(0,12,0,58)
+Status.BackgroundColor3 = Color3.fromRGB(20,26,45)
+Status.Text = "Ready"
+Status.TextColor3 = Color3.fromRGB(0,255,150)
+Status.Font = Enum.Font.GothamSemibold
+Status.TextSize = 12
+Status.Parent = Main
+
+Instance.new("UICorner", Status).CornerRadius = UDim.new(0,8)
+
+--------------------------------------------------
+-- CONTENT AREA
+--------------------------------------------------
+
+local Content = Instance.new("ScrollingFrame")
+Content.Size = UDim2.new(1,-24,1,-150)
+Content.Position = UDim2.new(0,12,0,100)
+Content.BackgroundTransparency = 1
+Content.BorderSizePixel = 0
+Content.ScrollBarThickness = 4
+Content.ScrollBarImageColor3 = Color3.fromRGB(68,140,255)
+Content.Parent = Main
+
+local Layout = Instance.new("UIListLayout")
+Layout.Padding = UDim.new(0,8)
+Layout.Parent = Content
+
+Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	Content.CanvasSize = UDim2.new(0,0,0,Layout.AbsoluteContentSize.Y + 8)
+end)
+
+--------------------------------------------------
+-- BIG HITBOX TOGGLE
+--------------------------------------------------
+
+local Row = Instance.new("Frame")
+Row.Size = UDim2.new(1,0,0,42)
+Row.BackgroundColor3 = Color3.fromRGB(18,24,40)
+Row.BorderSizePixel = 0
+Row.Parent = Content
+
+Instance.new("UICorner", Row).CornerRadius = UDim.new(0,8)
+
+local Label = Instance.new("TextLabel")
+Label.BackgroundTransparency = 1
+Label.Size = UDim2.new(1,-90,1,0)
+Label.Position = UDim2.new(0,12,0,0)
+Label.Text = "📦 Big Hitboxes"
+Label.TextColor3 = Color3.fromRGB(230,235,255)
+Label.Font = Enum.Font.GothamSemibold
+Label.TextSize = 12
+Label.TextXAlignment = Enum.TextXAlignment.Left
+Label.Parent = Row
+
+local Toggle = Instance.new("TextButton")
+Toggle.Size = UDim2.new(0,58,0,26)
+Toggle.Position = UDim2.new(1,-70,0.5,-13)
+Toggle.Text = ""
+Toggle.BorderSizePixel = 0
+Toggle.Parent = Row
+
+Instance.new("UICorner", Toggle).CornerRadius = UDim.new(1,0)
+
+local Knob = Instance.new("Frame")
+Knob.Size = UDim2.new(0,20,0,20)
+Knob.Position = UDim2.new(1,-23,0.5,-10)
+Knob.BackgroundColor3 = Color3.new(1,1,1)
+Knob.BorderSizePixel = 0
+Knob.Parent = Toggle
+
+Instance.new("UICorner", Knob).CornerRadius = UDim.new(1,0)
+
+local HitboxesEnabled = false
+local function RefreshToggle()
+	if HitboxesEnabled then
+		Toggle.BackgroundColor3 = Color3.fromRGB(38,132,255)
+		Knob.Position = UDim2.new(1,-23,0.5,-10)
+	else
+		Toggle.BackgroundColor3 = Color3.fromRGB(50,52,66)
+		Knob.Position = UDim2.new(0,3,0.5,-10)
+	end
+end
+
+RefreshToggle()
+Toggle.MouseButton1Click:Connect(function()
+	HitboxesEnabled = not HitboxesEnabled
+	_G.Disabled = HitboxesEnabled
+
+	if not HitboxesEnabled then
+		for _, v in ipairs(Players:GetPlayers()) do
+			if v ~= Player and v.Character then
+				local hrp = v.Character:FindFirstChild("HumanoidRootPart")
+
+				if hrp then
+					hrp.Size = Vector3.new(2, 2, 1)
+					hrp.Transparency = 1
+					hrp.Material = Enum.Material.Plastic
+					hrp.CanCollide = false
+				end
+			end
+		end
+	end
+
+	RefreshToggle()
+end)
+
+--------------------------------------------------
+-- HITBOX SIZE SLIDER
+--------------------------------------------------
+
+local SliderFrame = Instance.new("Frame")
+SliderFrame.Size = UDim2.new(1,0,0,34)
+SliderFrame.BackgroundTransparency = 1
+SliderFrame.Parent = Content
+
+local SliderLabel = Instance.new("TextLabel")
+SliderLabel.Size = UDim2.new(1,0,0,14)
+SliderLabel.BackgroundTransparency = 1
+SliderLabel.Text = "Hitbox Size: 50"
+SliderLabel.TextColor3 = Color3.fromRGB(180,200,255)
+SliderLabel.Font = Enum.Font.Gotham
+SliderLabel.TextSize = 11
+SliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+SliderLabel.Parent = SliderFrame
+
+local SliderBar = Instance.new("Frame")
+SliderBar.Size = UDim2.new(1,0,0,6)
+SliderBar.Position = UDim2.new(0,0,1,-8)
+SliderBar.BackgroundColor3 = Color3.fromRGB(40,45,60)
+SliderBar.BorderSizePixel = 0
+SliderBar.Parent = SliderFrame
+
+Instance.new("UICorner", SliderBar).CornerRadius = UDim.new(1,0)
+
+local SliderFill = Instance.new("Frame")
+SliderFill.Size = UDim2.new(0.5,0,1,0)
+SliderFill.BackgroundColor3 = Color3.fromRGB(38,132,255)
+SliderFill.BorderSizePixel = 0
+SliderFill.Parent = SliderBar
+
+Instance.new("UICorner", SliderFill).CornerRadius = UDim.new(1,0)
+
+local SliderKnob = Instance.new("TextButton")
+SliderKnob.Size = UDim2.new(0,14,0,14)
+SliderKnob.Position = UDim2.new(0.5,-7,0.5,-7)
+SliderKnob.BackgroundColor3 = Color3.new(1,1,1)
+SliderKnob.Text = ""
+SliderKnob.Parent = SliderBar
+
+Instance.new("UICorner", SliderKnob).CornerRadius = UDim.new(1,0)
+
+local DraggingSlider = false
+
+SliderKnob.MouseButton1Down:Connect(function()
+	DraggingSlider = true
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		DraggingSlider = false
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if not DraggingSlider then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		local mouseX = input.Position.X
+		local barX = SliderBar.AbsolutePosition.X
+		local barWidth = SliderBar.AbsoluteSize.X
+
+		local percent = math.clamp(
+			(mouseX - barX) / barWidth,
+			0,
+			1
+		)
+
+		SliderFill.Size = UDim2.new(percent,0,1,0)
+		SliderKnob.Position = UDim2.new(percent,-7,0.5,-7)
+
+		_G.HeadSize = math.floor(5 + (percent * 95))
+		SliderLabel.Text = "Hitbox Size: ".._G.HeadSize
+	end
+end)
+--------------------------------------------------
+-- INFINITE JUMP TOGGLE
+--------------------------------------------------
+
+local JumpRow = Instance.new("Frame")
+JumpRow.Size = UDim2.new(1,0,0,42)
+JumpRow.BackgroundColor3 = Color3.fromRGB(18,24,40)
+JumpRow.BorderSizePixel = 0
+JumpRow.Parent = Content
+
+Instance.new("UICorner", JumpRow).CornerRadius = UDim.new(0,8)
+
+local JumpLabel = Instance.new("TextLabel")
+JumpLabel.BackgroundTransparency = 1
+JumpLabel.Size = UDim2.new(1,-90,1,0)
+JumpLabel.Position = UDim2.new(0,12,0,0)
+JumpLabel.Text = "🚀 Infinite Jump"
+JumpLabel.TextColor3 = Color3.fromRGB(230,235,255)
+JumpLabel.Font = Enum.Font.GothamSemibold
+JumpLabel.TextSize = 12
+JumpLabel.TextXAlignment = Enum.TextXAlignment.Left
+JumpLabel.Parent = JumpRow
+
+local JumpToggle = Instance.new("TextButton")
+JumpToggle.Size = UDim2.new(0,58,0,26)
+JumpToggle.Position = UDim2.new(1,-70,0.5,-13)
+JumpToggle.Text = ""
+JumpToggle.BorderSizePixel = 0
+JumpToggle.Parent = JumpRow
+
+Instance.new("UICorner", JumpToggle).CornerRadius = UDim.new(1,0)
+
+local JumpKnob = Instance.new("Frame")
+JumpKnob.Size = UDim2.new(0,20,0,20)
+JumpKnob.BackgroundColor3 = Color3.new(1,1,1)
+JumpKnob.BorderSizePixel = 0
+JumpKnob.Parent = JumpToggle
+
+Instance.new("UICorner", JumpKnob).CornerRadius = UDim.new(1,0)
+
+local function RefreshJumpToggle()
+	if InfiniteJumpEnabled then
+		JumpToggle.BackgroundColor3 = Color3.fromRGB(38,132,255)
+		JumpKnob.Position = UDim2.new(1,-23,0.5,-10)
+	else
+		JumpToggle.BackgroundColor3 = Color3.fromRGB(50,52,66)
+		JumpKnob.Position = UDim2.new(0,3,0.5,-10)
+	end
+end
+
+RefreshJumpToggle()
+
+JumpToggle.MouseButton1Click:Connect(function()
+	InfiniteJumpEnabled = not InfiniteJumpEnabled
+
+	if InfiniteJumpEnabled then
+		Status.Text = "Infinite Jump Enabled"
+	else
+		Status.Text = "Infinite Jump Disabled"
+	end
+
+	RefreshJumpToggle()
+end)
+
+--------------------------------------------------
+-- WALKSPEED TOGGLE
+--------------------------------------------------
+
+local WalkRow = Instance.new("Frame")
+WalkRow.Size = UDim2.new(1,0,0,42)
+WalkRow.BackgroundColor3 = Color3.fromRGB(18,24,40)
+WalkRow.BorderSizePixel = 0
+WalkRow.Parent = Content
+
+Instance.new("UICorner", WalkRow).CornerRadius = UDim.new(0,8)
+
+local WalkLabel = Instance.new("TextLabel")
+WalkLabel.BackgroundTransparency = 1
+WalkLabel.Size = UDim2.new(1,-90,1,0)
+WalkLabel.Position = UDim2.new(0,12,0,0)
+WalkLabel.Text = "🏃 Walk Speed"
+WalkLabel.TextColor3 = Color3.fromRGB(230,235,255)
+WalkLabel.Font = Enum.Font.GothamSemibold
+WalkLabel.TextSize = 12
+WalkLabel.TextXAlignment = Enum.TextXAlignment.Left
+WalkLabel.Parent = WalkRow
+
+local WalkToggle = Instance.new("TextButton")
+WalkToggle.Size = UDim2.new(0,58,0,26)
+WalkToggle.Position = UDim2.new(1,-70,0.5,-13)
+WalkToggle.Text = ""
+WalkToggle.BorderSizePixel = 0
+WalkToggle.Parent = WalkRow
+
+Instance.new("UICorner", WalkToggle).CornerRadius = UDim.new(1,0)
+
+local WalkKnob = Instance.new("Frame")
+WalkKnob.Size = UDim2.new(0,20,0,20)
+WalkKnob.BackgroundColor3 = Color3.new(1,1,1)
+WalkKnob.BorderSizePixel = 0
+WalkKnob.Parent = WalkToggle
+
+Instance.new("UICorner", WalkKnob).CornerRadius = UDim.new(1,0)
+local function RefreshWalkToggle()
+	if WalkSpeedEnabled then
+		WalkToggle.BackgroundColor3 = Color3.fromRGB(38,132,255)
+		WalkKnob.Position = UDim2.new(1,-23,0.5,-10)
+	else
+		WalkToggle.BackgroundColor3 = Color3.fromRGB(50,52,66)
+		WalkKnob.Position = UDim2.new(0,3,0.5,-10)
+	end
+end
+
+RefreshWalkToggle()
+WalkToggle.MouseButton1Click:Connect(function()
+	WalkSpeedEnabled = not WalkSpeedEnabled
+
+	local Character = Player.Character
+	if Character then
+		local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+
+		if Humanoid then
+			if WalkSpeedEnabled then
+				Humanoid.WalkSpeed = WalkSpeed
+			else
+				Humanoid.WalkSpeed = 16
+			end
+		end
+	end
+
+	RefreshWalkToggle()
+end)
+--------------------------------------------------
+-- WALKSPEED SLIDER
+--------------------------------------------------
+
+local WalkSliderFrame = Instance.new("Frame")
+WalkSliderFrame.Size = UDim2.new(1,0,0,34)
+WalkSliderFrame.BackgroundTransparency = 1
+WalkSliderFrame.Parent = Content
+
+local WalkSliderLabel = Instance.new("TextLabel")
+WalkSliderLabel.Size = UDim2.new(1,0,0,14)
+WalkSliderLabel.BackgroundTransparency = 1
+WalkSliderLabel.Text = "Walk Speed: 16"
+WalkSliderLabel.TextColor3 = Color3.fromRGB(180,200,255)
+WalkSliderLabel.Font = Enum.Font.Gotham
+WalkSliderLabel.TextSize = 11
+WalkSliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+WalkSliderLabel.Parent = WalkSliderFrame
+
+local WalkSliderBar = Instance.new("Frame")
+WalkSliderBar.Size = UDim2.new(1,0,0,6)
+WalkSliderBar.Position = UDim2.new(0,0,1,-8)
+WalkSliderBar.BackgroundColor3 = Color3.fromRGB(40,45,60)
+WalkSliderBar.BorderSizePixel = 0
+WalkSliderBar.Parent = WalkSliderFrame
+
+Instance.new("UICorner", WalkSliderBar).CornerRadius = UDim.new(1,0)
+
+local WalkSliderFill = Instance.new("Frame")
+WalkSliderFill.Size = UDim2.new(0.08,0,1,0)
+WalkSliderFill.BackgroundColor3 = Color3.fromRGB(38,132,255)
+WalkSliderFill.BorderSizePixel = 0
+WalkSliderFill.Parent = WalkSliderBar
+
+Instance.new("UICorner", WalkSliderFill).CornerRadius = UDim.new(1,0)
+
+local WalkSliderKnob = Instance.new("TextButton")
+WalkSliderKnob.Size = UDim2.new(0,14,0,14)
+WalkSliderKnob.Position = UDim2.new(0.08,-7,0.5,-7)
+WalkSliderKnob.BackgroundColor3 = Color3.new(1,1,1)
+WalkSliderKnob.Text = ""
+WalkSliderKnob.Parent = WalkSliderBar
+
+Instance.new("UICorner", WalkSliderKnob).CornerRadius = UDim.new(1,0)
+local DraggingWalkSlider = false
+
+WalkSliderKnob.MouseButton1Down:Connect(function()
+	DraggingWalkSlider = true
+end)
+
+UIS.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		DraggingWalkSlider = false
+	end
+end)
+
+UIS.InputChanged:Connect(function(input)
+	if not DraggingWalkSlider then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		local mouseX = input.Position.X
+		local barX = WalkSliderBar.AbsolutePosition.X
+		local barWidth = WalkSliderBar.AbsoluteSize.X
+
+		local percent = math.clamp(
+			(mouseX - barX) / barWidth,
+			0,
+			1
+		)
+
+		WalkSliderFill.Size = UDim2.new(percent,0,1,0)
+		WalkSliderKnob.Position = UDim2.new(percent,-7,0.5,-7)
+
+		WalkSpeed = math.floor(16 + (percent * 184))
+
+		WalkSliderLabel.Text =
+			"Walk Speed: "..WalkSpeed
+
+		local Character = Player.Character
+		if Character then
+			local Humanoid =
+				Character:FindFirstChildOfClass("Humanoid")
+
+			if Humanoid and WalkSpeedEnabled then
+				Humanoid.WalkSpeed = WalkSpeed
+			end
+		end
+	end
+end)
+
+--------------------------------------------------
+-- JUMP POWER TOGGLE
+--------------------------------------------------
+
+local JumpPowerRow = Instance.new("Frame")
+JumpPowerRow.Size = UDim2.new(1,0,0,42)
+JumpPowerRow.BackgroundColor3 = Color3.fromRGB(18,24,40)
+JumpPowerRow.BorderSizePixel = 0
+JumpPowerRow.Parent = Content
+
+Instance.new("UICorner", JumpPowerRow).CornerRadius = UDim.new(0,8)
+
+local JumpPowerLabel = Instance.new("TextLabel")
+JumpPowerLabel.BackgroundTransparency = 1
+JumpPowerLabel.Size = UDim2.new(1,-90,1,0)
+JumpPowerLabel.Position = UDim2.new(0,12,0,0)
+JumpPowerLabel.Text = "🦘 Jump Power"
+JumpPowerLabel.TextColor3 = Color3.fromRGB(230,235,255)
+JumpPowerLabel.Font = Enum.Font.GothamSemibold
+JumpPowerLabel.TextSize = 12
+JumpPowerLabel.TextXAlignment = Enum.TextXAlignment.Left
+JumpPowerLabel.Parent = JumpPowerRow
+
+local JumpPowerToggle = Instance.new("TextButton")
+JumpPowerToggle.Size = UDim2.new(0,58,0,26)
+JumpPowerToggle.Position = UDim2.new(1,-70,0.5,-13)
+JumpPowerToggle.Text = ""
+JumpPowerToggle.BorderSizePixel = 0
+JumpPowerToggle.Parent = JumpPowerRow
+
+Instance.new("UICorner", JumpPowerToggle).CornerRadius = UDim.new(1,0)
+
+local JumpPowerKnob = Instance.new("Frame")
+JumpPowerKnob.Size = UDim2.new(0,20,0,20)
+JumpPowerKnob.BackgroundColor3 = Color3.new(1,1,1)
+JumpPowerKnob.BorderSizePixel = 0
+JumpPowerKnob.Parent = JumpPowerToggle
+
+Instance.new("UICorner", JumpPowerKnob).CornerRadius = UDim.new(1,0)
+
+local function RefreshJumpPowerToggle()
+	if JumpPowerEnabled then
+		JumpPowerToggle.BackgroundColor3 = Color3.fromRGB(38,132,255)
+		JumpPowerKnob.Position = UDim2.new(1,-23,0.5,-10)
+	else
+		JumpPowerToggle.BackgroundColor3 = Color3.fromRGB(50,52,66)
+		JumpPowerKnob.Position = UDim2.new(0,3,0.5,-10)
+	end
+end
+
+RefreshJumpPowerToggle()
+
+JumpPowerToggle.MouseButton1Click:Connect(function()
+	JumpPowerEnabled = not JumpPowerEnabled
+
+	local Character = Player.Character
+	if Character then
+		local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+
+		if Humanoid then
+			if JumpPowerEnabled then
+				Humanoid.UseJumpPower = true
+				Humanoid.JumpPower = JumpPower
+			else
+				Humanoid.JumpPower = 50
+			end
+		end
+	end
+
+	RefreshJumpPowerToggle()
+end)
+--------------------------------------------------
+-- JUMP POWER SLIDER
+--------------------------------------------------
+
+local JumpPower = 50
+
+local JumpSliderFrame = Instance.new("Frame")
+JumpSliderFrame.Size = UDim2.new(1,0,0,34)
+JumpSliderFrame.BackgroundTransparency = 1
+JumpSliderFrame.Parent = Content
+
+local JumpSliderLabel = Instance.new("TextLabel")
+JumpSliderLabel.Size = UDim2.new(1,0,0,14)
+JumpSliderLabel.BackgroundTransparency = 1
+JumpSliderLabel.Text = "Jump Power: 50"
+JumpSliderLabel.TextColor3 = Color3.fromRGB(180,200,255)
+JumpSliderLabel.Font = Enum.Font.Gotham
+JumpSliderLabel.TextSize = 11
+JumpSliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+JumpSliderLabel.Parent = JumpSliderFrame
+
+local JumpSliderBar = Instance.new("Frame")
+JumpSliderBar.Size = UDim2.new(1,0,0,6)
+JumpSliderBar.Position = UDim2.new(0,0,1,-8)
+JumpSliderBar.BackgroundColor3 = Color3.fromRGB(40,45,60)
+JumpSliderBar.BorderSizePixel = 0
+JumpSliderBar.Parent = JumpSliderFrame
+
+Instance.new("UICorner", JumpSliderBar).CornerRadius = UDim.new(1,0)
+
+local JumpSliderFill = Instance.new("Frame")
+JumpSliderFill.Size = UDim2.new(0.25,0,1,0)
+JumpSliderFill.BackgroundColor3 = Color3.fromRGB(38,132,255)
+JumpSliderFill.BorderSizePixel = 0
+JumpSliderFill.Parent = JumpSliderBar
+
+Instance.new("UICorner", JumpSliderFill).CornerRadius = UDim.new(1,0)
+
+local JumpSliderKnob = Instance.new("TextButton")
+JumpSliderKnob.Size = UDim2.new(0,14,0,14)
+JumpSliderKnob.Position = UDim2.new(0.25,-7,0.5,-7)
+JumpSliderKnob.BackgroundColor3 = Color3.new(1,1,1)
+JumpSliderKnob.Text = ""
+JumpSliderKnob.Parent = JumpSliderBar
+
+Instance.new("UICorner", JumpSliderKnob).CornerRadius = UDim.new(1,0)
+
+local DraggingJumpSlider = false
+
+JumpSliderKnob.MouseButton1Down:Connect(function()
+    DraggingJumpSlider = true
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        DraggingJumpSlider = false
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if not DraggingJumpSlider then
+        return
+    end
+
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        local mouseX = input.Position.X
+        local barX = JumpSliderBar.AbsolutePosition.X
+        local barWidth = JumpSliderBar.AbsoluteSize.X
+
+        local percent = math.clamp(
+            (mouseX - barX) / barWidth,
+            0,
+            1
+        )
+
+        JumpSliderFill.Size = UDim2.new(percent,0,1,0)
+        JumpSliderKnob.Position = UDim2.new(percent,-7,0.5,-7)
+
+        JumpPower = math.floor(25 + (percent * 175))
+
+        JumpSliderLabel.Text =
+            "Jump Power: "..JumpPower
+
+        local Character = Player.Character
+        if Character then
+            local Humanoid =
+                Character:FindFirstChildOfClass("Humanoid")
+
+            if Humanoid then
+            if JumpPowerEnabled then
+	Humanoid.UseJumpPower = true
+	Humanoid.JumpPower = JumpPower
+end
+            end
+        end
+    end
+end)
+
+
+
+--------------------------------------------------
+-- TRACERS TOGGLE
+--------------------------------------------------
+
+local TracerRow = Instance.new("Frame")
+TracerRow.Size = UDim2.new(1,0,0,42)
+TracerRow.BackgroundColor3 = Color3.fromRGB(18,24,40)
+TracerRow.BorderSizePixel = 0
+TracerRow.Parent = Content
+
+Instance.new("UICorner", TracerRow).CornerRadius = UDim.new(0,8)
+
+local TracerLabel = Instance.new("TextLabel")
+TracerLabel.BackgroundTransparency = 1
+TracerLabel.Size = UDim2.new(1,-90,1,0)
+TracerLabel.Position = UDim2.new(0,12,0,0)
+TracerLabel.Text = "🔍 Tracers"
+TracerLabel.TextColor3 = Color3.fromRGB(230,235,255)
+TracerLabel.Font = Enum.Font.GothamSemibold
+TracerLabel.TextSize = 12
+TracerLabel.TextXAlignment = Enum.TextXAlignment.Left
+TracerLabel.Parent = TracerRow
+
+local TracerToggle = Instance.new("TextButton")
+TracerToggle.Size = UDim2.new(0,58,0,26)
+TracerToggle.Position = UDim2.new(1,-70,0.5,-13)
+TracerToggle.Text = ""
+TracerToggle.BorderSizePixel = 0
+TracerToggle.Parent = TracerRow
+
+Instance.new("UICorner", TracerToggle).CornerRadius = UDim.new(1,0)
+
+local TracerKnob = Instance.new("Frame")
+TracerKnob.Size = UDim2.new(0,20,0,20)
+TracerKnob.BackgroundColor3 = Color3.new(1,1,1)
+TracerKnob.BorderSizePixel = 0
+TracerKnob.Parent = TracerToggle
+
+Instance.new("UICorner", TracerKnob).CornerRadius = UDim.new(1,0)
+
+local function RefreshTracerToggle()
+    if TracersEnabled then
+        TracerToggle.BackgroundColor3 = Color3.fromRGB(38,132,255)
+        TracerKnob.Position = UDim2.new(1,-23,0.5,-10)
+    else
+        TracerToggle.BackgroundColor3 = Color3.fromRGB(50,52,66)
+        TracerKnob.Position = UDim2.new(0,3,0.5,-10)
+    end
+end
+
+RefreshTracerToggle()
+TracerToggle.MouseButton1Click:Connect(function()
+    TracersEnabled = not TracersEnabled
+    RefreshTracerToggle()
+
+    if not TracersEnabled then
+        for _, line in pairs(TracerLines) do
+            line:Destroy()
+        end
+        table.clear(TracerLines)
+    end
+end)
+--------------------------------------------------
+-- EXECUTE BUTTON
+--------------------------------------------------
+
+local ActionButton = Instance.new("TextButton")
+ActionButton.Size = UDim2.new(1,-24,0,40)
+ActionButton.Position = UDim2.new(0,12,1,-52)
+ActionButton.BackgroundColor3 = Color3.fromRGB(194,50,50)
+ActionButton.Text = "EXECUTE"
+ActionButton.TextColor3 = Color3.new(1,1,1)
+ActionButton.Font = Enum.Font.GothamBold
+ActionButton.TextSize = 14
+ActionButton.Parent = Main
+
+Instance.new("UICorner", ActionButton).CornerRadius = UDim.new(0,8)
+
+--------------------------------------------------
+-- MINIMIZE ACTION
+--------------------------------------------------
+
+MinButton.MouseButton1Click:Connect(function()
+	Minimized = not Minimized
+
+	Content.Visible = not Minimized
+	Status.Visible = not Minimized
+	ActionButton.Visible = not Minimized
+
+	if Minimized then
+		Main.Size = UDim2.new(0,350,0,60)
+	else
+		Main.Size = UDim2.new(0,350,0,430)
+	end
+end)
+
+--------------------------------------------------
+-- BIG HITBOX SYSTEM
+--------------------------------------------------
+
+_G.HeadSize = 50
+_G.Disabled = false
+
+RunService.RenderStepped:Connect(function()
+	if not _G.Disabled then
+		return
+	end
+
+	for _, v in ipairs(Players:GetPlayers()) do
+		if v ~= Player and v.Character then
+			pcall(function()
+				local hrp = v.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					hrp.Size = Vector3.new(
+						_G.HeadSize,
+						_G.HeadSize,
+						_G.HeadSize
+					)
+					hrp.Transparency = 0.7
+					hrp.BrickColor = BrickColor.new("Really blue")
+					hrp.Material = Enum.Material.Neon
+					hrp.CanCollide = false
+				end
+			end)
+		end
+	end
+end)
+RunService.RenderStepped:Connect(function()
+
+    if not TracersEnabled then
+        return
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= Player and plr.Character then
+
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+
+            if hrp then
+
+                local pos, visible =
+                    Camera:WorldToViewportPoint(hrp.Position)
+
+                local line = TracerLines[plr]
+
+                if not line then
+                    line = Drawing.new("Line")
+                    line.Thickness = 2
+                    line.Color = Color3.fromRGB(0,255,255)
+                    TracerLines[plr] = line
+                end
+
+                if visible then
+                    line.Visible = true
+
+                    line.From = Vector2.new(
+                        Camera.ViewportSize.X / 2,
+                        Camera.ViewportSize.Y
+                    )
+
+                    line.To = Vector2.new(
+                        pos.X,
+                        pos.Y
+                    )
+                else
+                    line.Visible = false
+                end
+            end
+        end
+    end
+end)
+Players.PlayerRemoving:Connect(function(plr)
+    local line = TracerLines[plr]
+
+    if line then
+        line:Destroy()
+        TracerLines[plr] = nil
+    end
+end)
+
+--------------------------------------------------
+-- INFINITE JUMP SYSTEM
+--------------------------------------------------
+Player.CharacterAdded:Connect(function(Character)
+	local Humanoid = Character:WaitForChild("Humanoid")
+
+	if WalkSpeedEnabled then
+		Humanoid.WalkSpeed = WalkSpeed
+	else
+		Humanoid.WalkSpeed = 16
+	end
+
+	if JumpPowerEnabled then
+		Humanoid.UseJumpPower = true
+		Humanoid.JumpPower = JumpPower
+	else
+		Humanoid.JumpPower = 50
+	end
+end)
+
+UIS.JumpRequest:Connect(function()
+
+	if not InfiniteJumpEnabled then
+		return
+	end
+
+	local Character = Player.Character
+	if not Character then
+		return
+	end
+
+	local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+
+	if Humanoid then
+		Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
