@@ -29,6 +29,11 @@ local MAP_CONFIG = {
         Name = "Between Colors",
         Url = "https://justinalsd.github.io/script/map2",
     },
+
+    [92569361565307] = {
+        Name = "Mace Mayhem",
+        Url = "https://justinalsd.github.io/script/MaceMayhem",
+    },
 }
 
 local MAP_NAMES = {}
